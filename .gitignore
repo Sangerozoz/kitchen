@@ -1,0 +1,14 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+*.translation
+
+# Godot editor-generated import files inside build output
+build/**/*.import
+
+# System & editor temporary files
+.DS_Store
+Thumbs.db
+*.tmp
+*.bak
+*~
