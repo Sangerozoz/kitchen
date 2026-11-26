@@ -7,18 +7,16 @@ signal boost_started()
 @export var max_speed: float = 250.0
 @export var boost_speed: float = 385.0
 @export var cut_radius: float = 34.0
-@export var boost_cut_radius: float = 42.0
+@export var boost_cut_radius: float = 50.0
 
 var control_enabled: bool = false
 var play_bounds: Rect2 = Rect2(0, 0, 1024, 1536)
 
 var joystick_input: Vector2 = Vector2.ZERO
-var touch_boost_pressed: bool = false
 
-# Boost gauge (0..1)
-var boost_energy: float = 1.0
+# Power-up turbo boost timer (activated by picking up BoostPickup on the lawn)
+var boost_timer: float = 0.0
 var is_boosting: bool = false
-var _boost_exhausted: bool = false
 
 # Status effects from rocks & animals
 var rock_stun_timer: float = 0.0
@@ -35,6 +33,20 @@ var _knockback_vel: Vector2 = Vector2.ZERO
 
 # Lightweight procedural particles (grass clippings, sparks, mud drops, sparkles)
 var _particles: Array[Dictionary] = []
+
+# Smooth world-space rainbow ribbon trail during Turbo Boost!
+var _rainbow_trail: Array[Dictionary] = []
+var _trail_sample_dist: float = 0.0
+var _last_trail_pos: Vector2 = Vector2.ZERO
+
+const RAINBOW_BANDS := [
+	Color(1.00, 0.24, 0.32), # Red
+	Color(1.00, 0.58, 0.12), # Orange
+	Color(1.00, 0.90, 0.18), # Yellow
+	Color(0.30, 0.88, 0.38), # Green
+	Color(0.20, 0.82, 1.00), # Cyan-Blue
+	Color(0.68, 0.38, 1.00), # Violet
+]
 
 func _ready() -> void:
 	collision_layer = 1
@@ -53,9 +65,8 @@ func reset_state(start_pos: Vector2, bounds: Rect2) -> void:
 	velocity = Vector2.ZERO
 	_knockback_vel = Vector2.ZERO
 	facing_angle = -PI * 0.5
-	boost_energy = 1.0
+	boost_timer = 0.0
 	is_boosting = false
-	_boost_exhausted = false
 	rock_stun_timer = 0.0
 	dizzy_timer = 0.0
 	mud_slip_timer = 0.0
@@ -63,14 +74,24 @@ func reset_state(start_pos: Vector2, bounds: Rect2) -> void:
 	fever_active = false
 	_rock_hit_cooldown = 0.0
 	_particles.clear()
+	_rainbow_trail.clear()
+	_last_trail_pos = start_pos
 	queue_redraw()
 
 func get_active_cut_radius() -> float:
-	if rock_stun_timer > 0.0:
-		return cut_radius * 0.65
 	if is_boosting:
 		return boost_cut_radius
+	if rock_stun_timer > 0.0:
+		return cut_radius * 0.65
 	return cut_radius
+
+func activate_boost(duration: float = 5.5, max_stack: float = 9.0) -> void:
+	boost_timer = minf(boost_timer + duration, max_stack)
+	is_boosting = true
+	boost_started.emit()
+	_last_trail_pos = global_position
+	for i in range(RAINBOW_BANDS.size()):
+		spawn_burst(global_position, 3, RAINBOW_BANDS[i], 190.0)
 
 func apply_sheep_bump(push_dir: Vector2) -> bool:
 	if animal_grace_timer > 0.0:
@@ -146,6 +167,7 @@ func _physics_process(delta: float) -> void:
 	animal_grace_timer = maxf(0.0, animal_grace_timer - delta)
 
 	_update_particles(delta)
+	_update_rainbow_trail(delta)
 
 	if not control_enabled:
 		velocity = velocity.lerp(Vector2.ZERO, minf(delta * 8.0, 1.0))
@@ -165,23 +187,10 @@ func _physics_process(delta: float) -> void:
 		var wobble := PI * 0.72 + sin(Time.get_ticks_msec() * 0.015) * 0.55
 		steer_input = steer_input.rotated(wobble)
 
-	# Boost energy management
-	var wants_boost := (touch_boost_pressed or Input.is_action_pressed("boost")) and steer_input.length() > 0.15 and rock_stun_timer <= 0.0
-	if _boost_exhausted and boost_energy >= 0.28:
-		_boost_exhausted = false
-	var was_boosting := is_boosting
-	if wants_boost and not _boost_exhausted and boost_energy > 0.02:
-		is_boosting = true
-		boost_energy = maxf(0.0, boost_energy - delta * 0.44)
-		if boost_energy <= 0.02:
-			_boost_exhausted = true
-			is_boosting = false
-	else:
-		is_boosting = false
-		boost_energy = minf(1.0, boost_energy + delta * 0.24)
-
-	if is_boosting and not was_boosting:
-		boost_started.emit()
+	# Power-up turbo boost timer
+	if boost_timer > 0.0:
+		boost_timer = maxf(0.0, boost_timer - delta)
+	is_boosting = boost_timer > 0.0
 
 	# Speed & traction calculation
 	var target_max := boost_speed if is_boosting else max_speed
@@ -237,17 +246,32 @@ func _physics_process(delta: float) -> void:
 	_blade_angle += delta * blade_spd
 	_engine_jiggle += delta * (34.0 if is_boosting else 24.0)
 
-	# Boost flame or fever sparkles
-	if is_boosting and randf() < 0.65:
-		var back := global_position - Vector2.from_angle(facing_angle) * 24.0
-		_particles.append({
-			"pos": back + Vector2(randf_range(-5, 5), randf_range(-5, 5)),
-			"vel": -Vector2.from_angle(facing_angle) * randf_range(60.0, 120.0),
-			"col": Color(1.0, 0.68, 0.16) if randf() < 0.6 else Color(1.0, 0.94, 0.55),
-			"size": randf_range(3.5, 6.0),
-			"life": 0.25,
-			"max_life": 0.25,
-		})
+	# Rainbow sparkle confetti trailing behind mower during boost!
+	if is_boosting:
+		var back_dir := -Vector2.from_angle(facing_angle)
+		var side_dir := Vector2(-back_dir.y, back_dir.x)
+		var tail_pos := global_position + back_dir * 20.0
+		if _rainbow_trail.is_empty() or tail_pos.distance_to(_last_trail_pos) >= 6.5:
+			_rainbow_trail.append({
+				"pos": tail_pos,
+				"side": side_dir,
+				"age": 0.0,
+				"max_age": 0.62,
+			})
+			_last_trail_pos = tail_pos
+			if _rainbow_trail.size() > 64:
+				_rainbow_trail.pop_front()
+		if velocity.length() > 30.0 and randf() < 0.78:
+			var band_col: Color = RAINBOW_BANDS[randi() % RAINBOW_BANDS.size()]
+			var lateral := randf_range(-26.0, 26.0)
+			_particles.append({
+				"pos": tail_pos + side_dir * lateral,
+				"vel": back_dir * randf_range(45.0, 115.0) + side_dir * randf_range(-28.0, 28.0),
+				"col": band_col.lightened(0.2),
+				"size": randf_range(3.2, 5.8),
+				"life": randf_range(0.28, 0.48),
+				"max_life": 0.48,
+			})
 	elif mud_slip_timer > 0.0 and velocity.length() > 35.0 and randf() < 0.45:
 		var back := global_position - Vector2.from_angle(facing_angle) * 16.0
 		_particles.append({
@@ -273,7 +297,53 @@ func _update_particles(delta: float) -> void:
 			p["vel"] = Vector2(p["vel"]) * maxf(0.0, 1.0 - delta * 4.5)
 		i -= 1
 
+func _update_rainbow_trail(delta: float) -> void:
+	var i := _rainbow_trail.size() - 1
+	while i >= 0:
+		var pt: Dictionary = _rainbow_trail[i]
+		pt["age"] = float(pt["age"]) + delta
+		if float(pt["age"]) >= float(pt["max_age"]):
+			_rainbow_trail.remove_at(i)
+		i -= 1
+
+func _draw_rainbow_trail() -> void:
+	if _rainbow_trail.size() < 2:
+		return
+	var num_bands := RAINBOW_BANDS.size()
+	var total_half_w := 27.0
+	var band_w := (total_half_w * 2.0) / float(num_bands)
+
+	for i in range(_rainbow_trail.size() - 1):
+		var a: Dictionary = _rainbow_trail[i]
+		var b: Dictionary = _rainbow_trail[i + 1]
+		var p0: Vector2 = Vector2(a["pos"]) - global_position
+		var p1: Vector2 = Vector2(b["pos"]) - global_position
+		var seg_len := p0.distance_to(p1)
+		if seg_len < 0.5 or seg_len > 90.0:
+			continue
+		var s0: Vector2 = a["side"]
+		var s1: Vector2 = b["side"]
+		var life0 := clampf(1.0 - float(a["age"]) / float(a["max_age"]), 0.0, 1.0)
+		var life1 := clampf(1.0 - float(b["age"]) / float(b["max_age"]), 0.0, 1.0)
+		var taper0 := 0.35 + 0.65 * life0
+		var taper1 := 0.35 + 0.65 * life1
+		var alpha := minf(life0, life1) * 0.88
+		if alpha <= 0.02:
+			continue
+
+		var draw_w := band_w * ((taper0 + taper1) * 0.5) + 1.6
+		for k in range(num_bands):
+			var center_off := -total_half_w + (float(k) + 0.5) * band_w
+			var q0 := p0 + s0 * (center_off * taper0)
+			var q1 := p1 + s1 * (center_off * taper1)
+			var c: Color = RAINBOW_BANDS[k]
+			c.a = alpha
+			draw_line(q0, q1, c, draw_w, true)
+
 func _draw() -> void:
+	# Rainbow ribbon trail behind mower (drawn beneath mower & particles)
+	_draw_rainbow_trail()
+
 	# World-space particles drawn relative to mower position
 	for p in _particles:
 		var local_p: Vector2 = Vector2(p["pos"]) - global_position
@@ -289,9 +359,18 @@ func _draw() -> void:
 		draw_circle(Vector2.ZERO, r, Color(1.0, 0.85, 0.16, 0.16))
 		draw_arc(Vector2.ZERO, r, 0.0, TAU, 32, Color(1.0, 0.90, 0.24, 0.78), 2.8, true)
 
-	# Subtle mower blade cutting sweep circle under mower
+	# Subtle mower blade cutting sweep circle under mower (glows rainbow-gold when widened by Turbo Pickup!)
 	var cut_r := get_active_cut_radius()
-	draw_arc(Vector2.ZERO, cut_r, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.20 if not is_boosting else 0.42), 1.8, true)
+	if is_boosting:
+		var t_ms := Time.get_ticks_msec() * 0.004
+		var bp := 1.0 + 0.04 * sin(t_ms * 3.5)
+		draw_circle(Vector2.ZERO, cut_r * bp, Color(1.0, 0.96, 0.72, 0.14))
+		var seg := TAU / float(RAINBOW_BANDS.size())
+		for bi in range(RAINBOW_BANDS.size()):
+			var a0 := t_ms + float(bi) * seg
+			draw_arc(Vector2.ZERO, cut_r * bp, a0, a0 + seg * 0.92, 8, Color(RAINBOW_BANDS[bi].r, RAINBOW_BANDS[bi].g, RAINBOW_BANDS[bi].b, 0.88), 3.4, true)
+	else:
+		draw_arc(Vector2.ZERO, cut_r, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.22), 1.8, true)
 
 	# Ground shadow
 	draw_circle(Vector2(3.0, 6.0), 22.0, Color(0.04, 0.10, 0.04, 0.34))

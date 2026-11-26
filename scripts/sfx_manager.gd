@@ -1,16 +1,24 @@
 extends Node
 class_name SfxManager
 
-const SAMPLE_RATE := 22050
+const SAMPLE_RATE := 11025
 
 var _engine_player: AudioStreamPlayer
 var _sfx_players: Array[AudioStreamPlayer] = []
 var _sfx_cursor := 0
 var _streams: Dictionary = {}
 var _muted := false
+var _initialized := false
 var _last_cut_time := 0.0
 
 func _ready() -> void:
+	# Defer audio stream creation until first user gesture (important for iOS Safari Web Audio!)
+	pass
+
+func _ensure_initialized() -> void:
+	if _initialized:
+		return
+	_initialized = true
 	_build_streams()
 
 	_engine_player = AudioStreamPlayer.new()
@@ -18,7 +26,7 @@ func _ready() -> void:
 	_engine_player.volume_db = -24.0
 	add_child(_engine_player)
 
-	for i in range(8):
+	for i in range(6):
 		var p := AudioStreamPlayer.new()
 		add_child(p)
 		_sfx_players.append(p)
@@ -26,18 +34,20 @@ func _ready() -> void:
 func start_engine() -> void:
 	if _muted:
 		return
+	_ensure_initialized()
 	if not _engine_player.playing:
 		_engine_player.play()
 
 func stop_engine() -> void:
-	if _engine_player.playing:
+	if _engine_player != null and _engine_player.playing:
 		_engine_player.stop()
 
 func update_engine(speed_ratio: float, boosting: bool, active: bool) -> void:
 	if _muted or not active:
-		if _engine_player.playing:
+		if _engine_player != null and _engine_player.playing:
 			_engine_player.stop()
 		return
+	_ensure_initialized()
 	if not _engine_player.playing:
 		_engine_player.play()
 	var target_pitch := 0.78 + clampf(speed_ratio, 0.0, 1.4) * 0.48 + (0.22 if boosting else 0.0)
@@ -82,8 +92,15 @@ func play_tick(urgent: bool = false) -> void:
 func play_finish() -> void:
 	_play("finish", 1.0, -6.0)
 
+func play_star(star_idx: int) -> void:
+	var pitch := 1.0 + float(star_idx) * 0.18
+	_play("star_ding", pitch, -5.5)
+
 func _play(key: String, pitch: float = 1.0, vol_db: float = -8.0) -> void:
-	if _muted or not _streams.has(key):
+	if _muted:
+		return
+	_ensure_initialized()
+	if not _streams.has(key):
 		return
 	var p := _sfx_players[_sfx_cursor]
 	_sfx_cursor = (_sfx_cursor + 1) % _sfx_players.size()
@@ -105,6 +122,7 @@ func _build_streams() -> void:
 	_streams["boost"] = _gen_sweep(240.0, 580.0, 0.22)
 	_streams["tick"] = _gen_beep(880.0, 0.065)
 	_streams["finish"] = _gen_chime([523.25, 659.25, 783.99, 1046.5, 1318.5], 0.55)
+	_streams["star_ding"] = _gen_chime([587.33, 880.0, 1174.66], 0.28)
 
 func _make_wav(samples: PackedFloat32Array, loop: bool = false) -> AudioStreamWAV:
 	var wav := AudioStreamWAV.new()

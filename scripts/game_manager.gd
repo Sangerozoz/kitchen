@@ -3,7 +3,10 @@ class_name GameManager
 
 const MATCH_DURATION := 60.0
 const FEVER_DURATION := 6.5
+const BOOST_DURATION := 5.5
 const MAX_ACTIVE_FLOWERS := 4
+const MAX_ACTIVE_BOOSTS := 2
+const MAX_TOTAL_BOOSTS_PER_ROUND := 6
 const SAVE_PATH := "user://lawn_high_score.cfg"
 
 enum GameState { TITLE, PLAYING, GAME_OVER }
@@ -19,6 +22,8 @@ var flowers_harvested: int = 0
 var _last_whole_sec: int = 60
 var _special_patch_timer: float = 4.5
 var _flower_spawn_timer: float = 5.0
+var _boost_spawn_timer: float = 10.5
+var _boosts_spawned_total: int = 0
 var _shake_intensity: float = 0.0
 var _special_popup_accum: int = 0
 var _special_popup_timer: float = 0.0
@@ -33,6 +38,7 @@ var _world_objects: Node2D
 var _obstacles: Array[LawnObstacle] = []
 var _animals: Array[LawnAnimal] = []
 var _flowers: Array[SpecialFlower] = []
+var _boost_pickups: Array[BoostPickup] = []
 var _mud_puddles: Array[MudPuddle] = []
 
 func _ready() -> void:
@@ -64,17 +70,24 @@ func _build_scene_nodes() -> void:
 	_camera.zoom = Vector2(0.95, 0.95)
 	var rect := _lawn.get_play_rect()
 	_camera.limit_left = int(rect.position.x - 56.0)
-	_camera.limit_top = int(rect.position.y - 148.0)
+	_camera.limit_top = int(rect.position.y - 108.0)
 	_camera.limit_right = int(rect.end.x + 56.0)
-	_camera.limit_bottom = int(rect.end.y + 110.0)
+	_camera.limit_bottom = int(rect.end.y + 100.0)
 	add_child(_camera)
 
 	_hud = GameHUD.new()
 	_hud.start_requested.connect(_start_game)
 	_hud.restart_requested.connect(_start_game)
-	_hud.boost_pressed_changed.connect(func(p: bool) -> void: _mower.touch_boost_pressed = p)
+	_hud.home_requested.connect(_return_to_title)
+	_hud.star_landed.connect(func(idx: int) -> void: _sfx.play_star(idx))
 	add_child(_hud)
 	_hud.joystick.input_changed.connect(func(v: Vector2) -> void: _mower.joystick_input = v)
+
+func _return_to_title() -> void:
+	_setup_round(false)
+	state = GameState.TITLE
+	_sfx.stop_engine()
+	_hud.show_title(best_score)
 
 func _start_game() -> void:
 	_setup_round(true)
@@ -90,6 +103,7 @@ func _setup_round(clear_start_grass: bool) -> void:
 	_obstacles.clear()
 	_animals.clear()
 	_flowers.clear()
+	_boost_pickups.clear()
 	_mud_puddles.clear()
 
 	_lawn.reset_field()
@@ -108,6 +122,8 @@ func _setup_round(clear_start_grass: bool) -> void:
 	flowers_harvested = 0
 	_special_patch_timer = 4.2
 	_flower_spawn_timer = 5.5
+	_boost_spawn_timer = randf_range(10.0, 12.0)
+	_boosts_spawned_total = 0
 	_shake_intensity = 0.0
 	_special_popup_accum = 0
 	_special_popup_timer = 0.0
@@ -187,6 +203,9 @@ func _spawn_initial_specials(safe_center: Vector2) -> void:
 
 	for _j in range(2):
 		_spawn_random_flower()
+
+	# Spawn 1 turbo boost pickup right at the start so the player can spot & grab it!
+	_spawn_random_boost_pickup()
 
 func _pick_non_overlapping_pos(rect: Rect2, edge_pad: float, safe_center: Vector2, safe_rad: float, existing: Array[Dictionary], min_clearance: float) -> Vector2:
 	for _attempt in range(60):
@@ -270,15 +289,15 @@ func _process(delta: float) -> void:
 	if _special_popup_timer > 0.0:
 		_special_popup_timer -= delta
 		if _special_popup_timer <= 0.0 and _special_popup_accum > 0:
-			var tag := "4×超级彩草! +%d" if fever_timer > 0.0 else "2×彩草! +%d"
-			_spawn_floating_text(tag % _special_popup_accum, _mower.global_position + Vector2(0, -34), Color(1.0, 0.90, 0.22), 20)
+			var tag := "4× +%d" if fever_timer > 0.0 else "2× +%d"
+			_spawn_floating_text(tag % _special_popup_accum, _mower.global_position + Vector2(0, -34), Color(1.0, 0.90, 0.22), 24)
 			_special_popup_accum = 0
 
 	# Check early 100% lawn completion!
 	if _lawn.get_mowed_ratio() >= 0.995:
 		var time_bonus := int(ceil(time_left)) * 50
 		score += time_bonus
-		_spawn_floating_text("全图通关! +%d" % time_bonus, _mower.global_position, Color(1.0, 0.95, 0.3), 26)
+		_spawn_floating_text("100%%! +%d" % time_bonus, _mower.global_position, Color(1.0, 0.95, 0.3), 28)
 		_end_game()
 		return
 
@@ -290,6 +309,14 @@ func _process(delta: float) -> void:
 		elif fl.try_collect(_mower.global_position, _mower.get_active_cut_radius() * 0.72):
 			_flowers.remove_at(i)
 
+	# Check turbo boost pickup collection
+	for i in range(_boost_pickups.size() - 1, -1, -1):
+		var bp := _boost_pickups[i]
+		if not is_instance_valid(bp):
+			_boost_pickups.remove_at(i)
+		elif bp.try_collect(_mower.global_position, _mower.get_active_cut_radius() * 0.72):
+			_boost_pickups.remove_at(i)
+
 	# Check mud puddles from Muddy Pig
 	for i in range(_mud_puddles.size() - 1, -1, -1):
 		var puddle := _mud_puddles[i]
@@ -298,7 +325,7 @@ func _process(delta: float) -> void:
 		elif puddle.contains_point(_mower.global_position, 8.0):
 			if _mower.apply_mud_slip():
 				_sfx.play_mud()
-				_spawn_floating_text("踩泥打滑!", _mower.global_position + Vector2(0, -36), Color(0.88, 0.66, 0.42), 20)
+				_spawn_floating_text("打滑!", _mower.global_position + Vector2(0, -34), Color(0.95, 0.74, 0.48), 22)
 
 	# Periodic random spawns of special colored grass & flowers!
 	_special_patch_timer -= delta
@@ -313,6 +340,12 @@ func _process(delta: float) -> void:
 		if _flowers.size() < MAX_ACTIVE_FLOWERS:
 			_spawn_random_flower()
 
+	_boost_spawn_timer -= delta
+	if _boost_spawn_timer <= 0.0:
+		_boost_spawn_timer = randf_range(10.5, 13.5)
+		if _boost_pickups.size() < MAX_ACTIVE_BOOSTS and _boosts_spawned_total < MAX_TOTAL_BOOSTS_PER_ROUND:
+			_spawn_random_boost_pickup()
+
 	if _mower.velocity.length() > 35.0 or (MATCH_DURATION - time_left) > 4.5:
 		_hud.hide_touch_hint()
 
@@ -326,9 +359,7 @@ func _spawn_random_special_grass() -> void:
 	avoid.append(_mower.global_position)
 	var spot := _lawn.find_unmowed_spot(78.0, avoid, 90.0)
 	if spot.x >= 0.0:
-		var painted := _lawn.spawn_special_patch(spot, randf_range(50.0, 72.0), randf() < 0.45)
-		if painted > 0:
-			_spawn_floating_text("★ 彩草出现!", spot, Color(1.0, 0.90, 0.25), 18)
+		_lawn.spawn_special_patch(spot, randf_range(50.0, 72.0), randf() < 0.45)
 
 func _spawn_random_flower() -> void:
 	var avoid := _collect_obstacle_positions()
@@ -358,12 +389,37 @@ func _on_flower_collected(fl: SpecialFlower) -> void:
 	fever_timer = minf(fever_timer + FEVER_DURATION, FEVER_DURATION * 1.6)
 	_sfx.play_flower()
 	_mower.spawn_burst(fl.position, 18, fl.get_primary_color(), 190.0)
-	_spawn_floating_text("★ 奖励翻倍 2×! +%d" % bonus, fl.position + Vector2(0, -24), Color(1.0, 0.94, 0.28), 23, 1.25)
+	_spawn_floating_text("2× +%d" % bonus, fl.position + Vector2(0, -24), Color(1.0, 0.94, 0.28), 26, 1.15)
 
-func _on_mower_hit_rock(pos: Vector2) -> void:
+func _spawn_random_boost_pickup() -> void:
+	var avoid := _collect_obstacle_positions()
+	avoid.append(_mower.global_position)
+	for fl in _flowers:
+		if is_instance_valid(fl):
+			avoid.append(fl.position)
+	for bp in _boost_pickups:
+		if is_instance_valid(bp):
+			avoid.append(bp.position)
+	var spot := _lawn.find_unmowed_spot(84.0, avoid, 110.0)
+	if spot.x < 0.0:
+		var rect := _lawn.get_play_rect().grow(-84.0)
+		spot = Vector2(randf_range(rect.position.x, rect.end.x), randf_range(rect.position.y, rect.end.y))
+	var pickup := BoostPickup.new()
+	pickup.setup(spot, 18.0)
+	pickup.collected.connect(_on_boost_pickup_collected)
+	pickup.expired.connect(func(p: BoostPickup) -> void: _boost_pickups.erase(p))
+	_world_objects.add_child(pickup)
+	_boost_pickups.append(pickup)
+	_boosts_spawned_total += 1
+
+func _on_boost_pickup_collected(pickup: BoostPickup) -> void:
+	_mower.activate_boost(BOOST_DURATION, BOOST_DURATION * 1.6)
+	_shake_intensity = maxf(_shake_intensity, 4.5)
+	_spawn_floating_text("冲刺!", pickup.position + Vector2(0, -26), Color(1.0, 0.94, 0.34), 26, 1.05)
+
+func _on_mower_hit_rock(_pos: Vector2) -> void:
 	_sfx.play_rock()
 	_shake_intensity = maxf(_shake_intensity, 7.5)
-	_spawn_floating_text("撞到石头!", pos + Vector2(0, -28), Color(1.0, 0.72, 0.48), 19)
 
 func _on_animal_interfered(_animal: LawnAnimal, kind: LawnAnimal.AnimalType, push_dir: Vector2) -> void:
 	if state != GameState.PLAYING:
@@ -373,17 +429,17 @@ func _on_animal_interfered(_animal: LawnAnimal, kind: LawnAnimal.AnimalType, pus
 			if _mower.apply_sheep_bump(push_dir):
 				_sfx.play_sheep()
 				_shake_intensity = maxf(_shake_intensity, 8.5)
-				_spawn_floating_text("绵羊顶撞!", _mower.global_position + Vector2(0, -36), Color(1.0, 0.96, 0.85), 21)
+				_spawn_floating_text("咩!", _mower.global_position + Vector2(0, -34), Color(1.0, 0.98, 0.90), 24)
 		LawnAnimal.AnimalType.DOG:
 			if _mower.apply_dog_dizzy(push_dir):
 				_sfx.play_dog()
 				_shake_intensity = maxf(_shake_intensity, 7.0)
-				_spawn_floating_text("小狗捣乱：转向眩晕!", _mower.global_position + Vector2(0, -38), Color(1.0, 0.78, 0.25), 21)
+				_spawn_floating_text("眩晕!", _mower.global_position + Vector2(0, -36), Color(1.0, 0.82, 0.25), 24)
 		LawnAnimal.AnimalType.PIG:
 			if _mower.apply_mud_slip():
 				_sfx.play_mud()
 				_shake_intensity = maxf(_shake_intensity, 5.5)
-				_spawn_floating_text("泥巴小猪：打滑漂移!", _mower.global_position + Vector2(0, -36), Color(1.0, 0.68, 0.78), 21)
+				_spawn_floating_text("打滑!", _mower.global_position + Vector2(0, -34), Color(1.0, 0.72, 0.80), 24)
 
 func _on_pig_spawned_mud(pos: Vector2) -> void:
 	if state != GameState.PLAYING:
@@ -407,8 +463,8 @@ func _update_hud_frame() -> void:
 		score,
 		fever_timer,
 		FEVER_DURATION,
-		_mower.boost_energy,
-		_mower.is_boosting,
+		_mower.boost_timer,
+		BOOST_DURATION,
 		_mower.get_status_label()
 	)
 	_hud.update_minimap(
@@ -417,13 +473,13 @@ func _update_hud_frame() -> void:
 		_mower.global_position,
 		_mower.facing_angle,
 		_flowers,
+		_boost_pickups,
 		_animals
 	)
 
 func _end_game() -> void:
 	state = GameState.GAME_OVER
 	_mower.control_enabled = false
-	_mower.touch_boost_pressed = false
 	_sfx.stop_engine()
 	_sfx.play_finish()
 

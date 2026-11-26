@@ -1,14 +1,11 @@
 # Godot 4+ specific ignores
 .godot/
-/android/
-*.translation
+.nomedia
 
-# Godot editor-generated import files inside build output
-build/**/*.import
-
-# System & editor temporary files
+# OS / Editor junk
 .DS_Store
 Thumbs.db
-*.tmp
-*.bak
-*~
+
+# Keep build/web for GitHub Pages deployment workflow
+build/*
+!build/web/
