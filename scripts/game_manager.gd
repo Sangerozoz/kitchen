@@ -76,7 +76,7 @@ func _build_scene_nodes() -> void:
 	add_child(_camera)
 
 	_hud = GameHUD.new()
-	_hud.start_requested.connect(_begin_play_from_home)
+	_hud.start_requested.connect(_start_game)
 	_hud.restart_requested.connect(_start_game)
 	_hud.home_requested.connect(_return_to_title)
 	_hud.mute_toggled.connect(_on_mute_toggled)
@@ -287,9 +287,6 @@ func _process(delta: float) -> void:
 
 	if state == GameState.TITLE:
 		_sfx.update_engine(0.0, false, false)
-		var kb_vec := Input.get_vector("move_left", "move_right", "move_up", "move_down")
-		if _mower.joystick_input.length() > 0.12 or kb_vec.length() > 0.10:
-			_begin_play_from_home()
 		return
 
 	if state != GameState.PLAYING:

@@ -18,6 +18,8 @@ var show_idle_ring: bool = true
 
 # Rect (in global screen coords) excluded from joystick touch capture (e.g. Sound button)
 var excluded_rect: Rect2 = Rect2()
+var top_exclude_y: float = 110.0
+var bottom_safe_margin: float = 24.0
 
 var _active_touch_idx: int = -1
 var _base_pos: Vector2 = Vector2.ZERO
@@ -53,8 +55,8 @@ func _input(event: InputEvent) -> void:
 			queue_redraw()
 
 func _can_capture(pos: Vector2) -> bool:
-	# Ignore top HUD strip so taps on top don't accidentally steer
-	if pos.y < 110.0:
+	# Ignore top HUD strip (including safe-area notch) so taps on top don't accidentally steer
+	if pos.y < top_exclude_y:
 		return false
 	if excluded_rect.has_point(pos):
 		return false
@@ -99,8 +101,8 @@ func _draw() -> void:
 		draw_circle(_knob_pos, 26.0, Color(1.0, 1.0, 1.0, 0.85))
 		draw_circle(_knob_pos, 18.0, Color(0.32, 0.78, 0.28, 0.92))
 	elif show_idle_ring and not has_moved_once:
-		# Gentle resting hint indicator in lower center before first touch
-		var hint_center := Vector2(size.x * 0.5, size.y - 148.0)
+		# Gentle resting hint indicator in lower center above bottom safe area before first touch
+		var hint_center := Vector2(size.x * 0.5, size.y - bottom_safe_margin - 128.0)
 		var pulse := 1.0 + 0.06 * sin(Time.get_ticks_msec() * 0.005)
 		draw_circle(hint_center, 52.0 * pulse, Color(0.08, 0.16, 0.10, 0.22))
 		draw_arc(hint_center, 52.0 * pulse, 0.0, TAU, 36, Color(1.0, 1.0, 1.0, 0.45), 2.4, true)

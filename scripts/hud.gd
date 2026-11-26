@@ -24,9 +24,16 @@ var _sound_btn: SoundToggleButton
 
 var _title_overlay: Control
 var _title_logo: TextureRect
-var _title_drag_cue: HomeDragCue
+var _title_start_btn: GlossyStartButton
 var _title_best_badge: CrownScoreBadge
 var _title_fade_tween: Tween
+
+var _safe_containers: Array[Control] = []
+var _last_vp_size: Vector2 = Vector2.ZERO
+var _safe_top: float = 18.0
+var _safe_bottom: float = 24.0
+var _safe_left: float = 0.0
+var _safe_right: float = 0.0
 
 var _gameover_overlay: Control
 var _go_card: GameOverCardWidget
@@ -45,6 +52,9 @@ func _ready() -> void:
 	layer = 20
 	_load_assets()
 	_build_ui()
+	get_viewport().size_changed.connect(_apply_safe_area)
+	_apply_safe_area()
+	call_deferred("_apply_safe_area")
 
 func _load_assets() -> void:
 	var cf: FontFile = load("res://assets/fonts/cute_font.ttf")
@@ -62,28 +72,38 @@ func _load_assets() -> void:
 	_tex_star_empty = load("res://assets/ui/star_empty.png")
 	_tex_harvest_title = load("res://assets/ui/harvest_title.png")
 
+func _make_safe_container(parent: Control) -> Control:
+	var box := Control.new()
+	box.set_anchors_preset(Control.PRESET_FULL_RECT)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	parent.add_child(box)
+	_safe_containers.append(box)
+	return box
+
 func _build_ui() -> void:
 	var root := Control.new()
 	root.set_anchors_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(root)
 
-	# Virtual joystick layer
+	# Virtual joystick layer (full edge-to-edge touch area, top HUD + mute excluded)
 	joystick = ThumbJoystick.new()
 	root.add_child(joystick)
 
-	# --- SLEEK CARTOON TOP HUD BAR (58px tall, real AI glossy icons!) ---
+	var hud_safe := _make_safe_container(root)
+
+	# --- SLEEK CARTOON TOP HUD BAR (safe below notch / Dynamic Island!) ---
 	_top_hud = TopHudWidget.new()
 	_top_hud.cute_font = _cute_font
 	_top_hud.tex_grass = _tex_grass
 	_top_hud.tex_clock = _tex_clock
 	_top_hud.tex_star = _tex_star_gold
 	_top_hud.set_anchors_preset(Control.PRESET_TOP_WIDE)
-	_top_hud.offset_top = 10.0
-	_top_hud.offset_bottom = 72.0
-	_top_hud.offset_left = 10.0
-	_top_hud.offset_right = -10.0
-	root.add_child(_top_hud)
+	_top_hud.offset_top = 6.0
+	_top_hud.offset_bottom = 68.0
+	_top_hud.offset_left = 12.0
+	_top_hud.offset_right = -12.0
+	hud_safe.add_child(_top_hud)
 
 	# --- COMPACT CARTOON BUFF & FEEDBACK STACK ---
 	_buff_stack = VBoxContainer.new()
@@ -95,7 +115,7 @@ func _build_ui() -> void:
 	_buff_stack.add_theme_constant_override("separation", 6)
 	_buff_stack.alignment = BoxContainer.ALIGNMENT_BEGIN
 	_buff_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(_buff_stack)
+	hud_safe.add_child(_buff_stack)
 
 	_fever_pill = BuffPillWidget.new()
 	_fever_pill.setup_style(BuffPillWidget.Style.FEVER, _cute_font, _tex_flower)
@@ -115,24 +135,24 @@ func _build_ui() -> void:
 	_status_pill.visible = false
 	_buff_stack.add_child(_status_pill)
 
-	# --- BOTTOM-LEFT CARTOON MINIMAP ---
+	# --- TOP-LEFT CARTOON MINIMAP (right below top HUD grass pill, clear of notch!) ---
 	_minimap = MinimapWidget.new()
-	_minimap.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_minimap.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_minimap.offset_left = 14.0
 	_minimap.offset_right = 102.0
-	_minimap.offset_top = -148.0
-	_minimap.offset_bottom = -16.0
-	root.add_child(_minimap)
+	_minimap.offset_top = 78.0
+	_minimap.offset_bottom = 210.0
+	hud_safe.add_child(_minimap)
 
-	# --- ULTRA-COMPACT TOUCH HINT PILL ---
+	# --- ULTRA-COMPACT TOUCH HINT PILL (well above bottom safe margin) ---
 	_hint_panel = _make_pill_panel(Color(0.99, 0.96, 0.85, 0.90), Color(0.38, 0.22, 0.08, 0.92), 8)
 	_hint_panel.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
 	_hint_panel.offset_left = -68.0
 	_hint_panel.offset_right = 68.0
-	_hint_panel.offset_top = -222.0
-	_hint_panel.offset_bottom = -188.0
+	_hint_panel.offset_top = -176.0
+	_hint_panel.offset_bottom = -142.0
 	_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(_hint_panel)
+	hud_safe.add_child(_hint_panel)
 
 	var hint_lbl := _make_label("拖动割草", 17, Color(0.30, 0.17, 0.05), HORIZONTAL_ALIGNMENT_CENTER, true)
 	hint_lbl.add_theme_constant_override("outline_size", 0)
@@ -141,19 +161,120 @@ func _build_ui() -> void:
 	_build_title_overlay(root)
 	_build_gameover_overlay(root)
 
-	# Compact cartoon Sound/BGM toggle button (bottom-right, always accessible)
+	# Topmost safe layer so top-right Sound/BGM toggle stays accessible across Title, Playing, and GameOver
+	var top_controls_safe := _make_safe_container(root)
 	_sound_btn = SoundToggleButton.new()
-	_sound_btn.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_sound_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_sound_btn.offset_left = -64.0
 	_sound_btn.offset_right = -14.0
-	_sound_btn.offset_top = -66.0
-	_sound_btn.offset_bottom = -16.0
+	_sound_btn.offset_top = 10.0
+	_sound_btn.offset_bottom = 60.0
 	_sound_btn.pressed.connect(func() -> void: mute_toggled.emit())
-	root.add_child(_sound_btn)
+	top_controls_safe.add_child(_sound_btn)
 
 	set_playing_ui_visible(false)
 
+func _compute_safe_insets() -> Dictionary:
+	var vp := get_viewport()
+	if vp == null:
+		return {"top": 18.0, "bottom": 24.0, "left": 0.0, "right": 0.0}
+	var vp_size := vp.get_visible_rect().size
+	if vp_size.x <= 1.0 or vp_size.y <= 1.0:
+		return {"top": 18.0, "bottom": 24.0, "left": 0.0, "right": 0.0}
+
+	var aspect := vp_size.y / vp_size.x
+	var is_tall_phone := aspect >= 1.85
+	var is_touch_mobile := false
+
+	var rep_top := 0.0
+	var rep_bottom := 0.0
+	var rep_left := 0.0
+	var rep_right := 0.0
+
+	if OS.has_feature("web"):
+		var raw = JavaScriptBridge.eval("window.__getSafeAreaInsets ? window.__getSafeAreaInsets() : ''")
+		if raw is String and raw != "":
+			var parts := (raw as String).split(",")
+			if parts.size() >= 7:
+				var css_t := parts[0].to_float()
+				var css_b := parts[1].to_float()
+				var css_l := parts[2].to_float()
+				var css_r := parts[3].to_float()
+				var inner_w := parts[4].to_float()
+				var inner_h := parts[5].to_float()
+				is_touch_mobile = parts[6].to_int() == 1
+				if inner_h > 1.0 and inner_w > 1.0:
+					var sy := vp_size.y / inner_h
+					var sx := vp_size.x / inner_w
+					rep_top = css_t * sy
+					rep_bottom = css_b * sy
+					rep_left = css_l * sx
+					rep_right = css_r * sx
+	elif OS.has_feature("ios") or OS.has_feature("android"):
+		is_touch_mobile = true
+		var win_size := Vector2(DisplayServer.window_get_size())
+		var safe_rect := DisplayServer.get_display_safe_area()
+		if win_size.x > 1.0 and win_size.y > 1.0 and safe_rect.size.x > 0 and safe_rect.size.y > 0:
+			var sx := vp_size.x / win_size.x
+			var sy := vp_size.y / win_size.y
+			rep_top = maxf(0.0, float(safe_rect.position.y) * sy)
+			rep_bottom = maxf(0.0, (win_size.y - float(safe_rect.end.y)) * sy)
+			rep_left = maxf(0.0, float(safe_rect.position.x) * sx)
+			rep_right = maxf(0.0, (win_size.x - float(safe_rect.end.x)) * sx)
+
+	# Guarantee comfortable safe clearance even when mobile WebViews report 0px for env(safe-area-inset-*)
+	var min_top := 76.0 if is_tall_phone else (42.0 if is_touch_mobile else 16.0)
+	var min_bottom := 46.0 if is_tall_phone else (32.0 if is_touch_mobile else 22.0)
+	var final_top := maxf(rep_top + (8.0 if rep_top > 0.0 else 0.0), min_top)
+	var final_bottom := maxf(rep_bottom + (8.0 if rep_bottom > 0.0 else 0.0), min_bottom)
+
+	return {
+		"top": clampf(final_top, 16.0, vp_size.y * 0.16),
+		"bottom": clampf(final_bottom, 20.0, vp_size.y * 0.12),
+		"left": clampf(rep_left, 0.0, vp_size.x * 0.08),
+		"right": clampf(rep_right, 0.0, vp_size.x * 0.08),
+	}
+
+func _apply_safe_area() -> void:
+	var vp := get_viewport()
+	if vp == null:
+		return
+	_last_vp_size = vp.get_visible_rect().size
+	var insets := _compute_safe_insets()
+	_safe_top = float(insets["top"])
+	_safe_bottom = float(insets["bottom"])
+	_safe_left = float(insets["left"])
+	_safe_right = float(insets["right"])
+
+	for box in _safe_containers:
+		if is_instance_valid(box):
+			box.offset_top = _safe_top
+			box.offset_bottom = -_safe_bottom
+			box.offset_left = _safe_left
+			box.offset_right = -_safe_right
+
+	if joystick != null:
+		joystick.top_exclude_y = _safe_top + 78.0
+		joystick.bottom_safe_margin = _safe_bottom
+
+func _update_sound_btn_pos(in_gameplay: bool) -> void:
+	if _sound_btn == null:
+		return
+	if in_gameplay:
+		# Top-right directly below score pill, symmetrically opposite the top-left minimap
+		_sound_btn.offset_top = 78.0
+		_sound_btn.offset_bottom = 128.0
+	else:
+		# Clean top-right corner of safe area on Title and GameOver screens
+		_sound_btn.offset_top = 10.0
+		_sound_btn.offset_bottom = 60.0
+
 func _process(_delta: float) -> void:
+	var vp := get_viewport()
+	if vp != null:
+		var cur_sz := vp.get_visible_rect().size
+		if cur_sz != _last_vp_size:
+			_apply_safe_area()
 	if _sound_btn != null and joystick != null:
 		joystick.excluded_rect = _sound_btn.get_global_rect().grow(10.0)
 
@@ -163,18 +284,30 @@ func set_muted_visual(muted: bool) -> void:
 		_sound_btn.queue_redraw()
 
 func _build_title_overlay(root: Control) -> void:
-	# Transparent live-meadow Home overlay! Touch/drag goes straight through to ThumbJoystick.
+	# Fullscreen illustrated Start Screen (blocks touch pass-through until Start button is tapped!)
 	_title_overlay = Control.new()
 	_title_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_title_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
 	root.add_child(_title_overlay)
 
-	# Static Title Logo floating cleanly at the top over the live meadow
+	# Fullscreen portrait meadow key art background (edge-to-edge behind safe area)
+	var bg := TextureRect.new()
+	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
+	bg.texture = load("res://assets/ui/start_bg.jpg")
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	bg.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_title_overlay.add_child(bg)
+
+	var title_safe := _make_safe_container(_title_overlay)
+
+	# Static Title Logo framed cleanly in upper sky inside safe area
 	_title_logo = TextureRect.new()
-	_title_logo.anchor_left = 0.08
-	_title_logo.anchor_right = 0.92
-	_title_logo.anchor_top = 0.025
-	_title_logo.anchor_bottom = 0.265
+	_title_logo.anchor_left = 0.05
+	_title_logo.anchor_right = 0.95
+	_title_logo.anchor_top = 0.03
+	_title_logo.anchor_bottom = 0.36
 	_title_logo.offset_left = 0.0
 	_title_logo.offset_right = 0.0
 	_title_logo.offset_top = 0.0
@@ -184,35 +317,38 @@ func _build_title_overlay(root: Control) -> void:
 	_title_logo.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_title_logo.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	_title_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_title_overlay.add_child(_title_logo)
+	title_safe.add_child(_title_logo)
 
-	# Compact Crown + Best Score badge neatly under the Logo
+	# Visual Crown + Best Score badge neatly above the Start button
 	_title_best_badge = CrownScoreBadge.new()
 	_title_best_badge.cute_font = _cute_font
 	_title_best_badge.tex_crown = _tex_crown
-	_title_best_badge.anchor_left = 0.30
-	_title_best_badge.anchor_right = 0.70
-	_title_best_badge.anchor_top = 0.268
-	_title_best_badge.anchor_bottom = 0.318
+	_title_best_badge.anchor_left = 0.27
+	_title_best_badge.anchor_right = 0.73
+	_title_best_badge.anchor_top = 0.695
+	_title_best_badge.anchor_bottom = 0.755
 	_title_best_badge.offset_left = 0.0
 	_title_best_badge.offset_right = 0.0
 	_title_best_badge.offset_top = 0.0
 	_title_best_badge.offset_bottom = 0.0
 	_title_best_badge.visible = false
-	_title_overlay.add_child(_title_best_badge)
+	title_safe.add_child(_title_best_badge)
 
-	# Animated Visual Drag-to-Start Cue at the bottom (no button needed — just drag to mow!)
-	_title_drag_cue = HomeDragCue.new()
-	_title_drag_cue.cute_font = _cute_font
-	_title_drag_cue.anchor_left = 0.16
-	_title_drag_cue.anchor_right = 0.84
-	_title_drag_cue.anchor_top = 0.72
-	_title_drag_cue.anchor_bottom = 0.91
-	_title_drag_cue.offset_left = 0.0
-	_title_drag_cue.offset_right = 0.0
-	_title_drag_cue.offset_top = 0.0
-	_title_drag_cue.offset_bottom = 0.0
-	_title_overlay.add_child(_title_drag_cue)
+	# Glossy Start Button ("开始割草") with safe bottom clearance
+	_title_start_btn = GlossyStartButton.new()
+	_title_start_btn.text = "开始割草"
+	_title_start_btn.art_texture = load("res://assets/ui/start_btn_text.png")
+	_title_start_btn.cute_font = _cute_font
+	_title_start_btn.anchor_left = 0.11
+	_title_start_btn.anchor_right = 0.89
+	_title_start_btn.anchor_top = 0.775
+	_title_start_btn.anchor_bottom = 0.875
+	_title_start_btn.offset_left = 0.0
+	_title_start_btn.offset_right = 0.0
+	_title_start_btn.offset_top = 0.0
+	_title_start_btn.offset_bottom = 0.0
+	_title_start_btn.pressed.connect(func() -> void: start_requested.emit())
+	title_safe.add_child(_title_start_btn)
 
 func _build_gameover_overlay(root: Control) -> void:
 	_gameover_overlay = ColorRect.new()
@@ -221,7 +357,9 @@ func _build_gameover_overlay(root: Control) -> void:
 	_gameover_overlay.visible = false
 	root.add_child(_gameover_overlay)
 
-	# Clean, Airy Cartoon Settlement Card matching reference casual games!
+	var go_safe := _make_safe_container(_gameover_overlay)
+
+	# Clean, Airy Cartoon Settlement Card inside safe area!
 	_go_card = GameOverCardWidget.new()
 	_go_card.cute_font = _cute_font
 	_go_card.harvest_title_tex = _tex_harvest_title
@@ -233,26 +371,26 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_card.star_landed.connect(func(idx: int) -> void: star_landed.emit(idx))
 	_go_card.anchor_left = 0.08
 	_go_card.anchor_right = 0.92
-	_go_card.anchor_top = 0.16
-	_go_card.anchor_bottom = 0.76
+	_go_card.anchor_top = 0.11
+	_go_card.anchor_bottom = 0.73
 	_go_card.offset_left = 0.0
 	_go_card.offset_right = 0.0
 	_go_card.offset_top = 0.0
 	_go_card.offset_bottom = 0.0
-	_gameover_overlay.add_child(_go_card)
+	go_safe.add_child(_go_card)
 
-	# Clean Floating Action Row right below the card (Circular Back/Home + Glossy "再来一局"!)
+	# Clean Floating Action Row right below the card (safe bottom margin!)
 	_go_home_btn = RoundBackButton.new()
 	_go_home_btn.anchor_left = 0.11
 	_go_home_btn.anchor_right = 0.27
-	_go_home_btn.anchor_top = 0.792
-	_go_home_btn.anchor_bottom = 0.882
+	_go_home_btn.anchor_top = 0.768
+	_go_home_btn.anchor_bottom = 0.862
 	_go_home_btn.offset_left = 0.0
 	_go_home_btn.offset_right = 0.0
 	_go_home_btn.offset_top = 0.0
 	_go_home_btn.offset_bottom = 0.0
 	_go_home_btn.pressed.connect(func() -> void: home_requested.emit())
-	_gameover_overlay.add_child(_go_home_btn)
+	go_safe.add_child(_go_home_btn)
 
 	_go_retry_btn = GlossyStartButton.new()
 	_go_retry_btn.text = "再来一局"
@@ -260,20 +398,21 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_retry_btn.font_size_override = 34
 	_go_retry_btn.anchor_left = 0.30
 	_go_retry_btn.anchor_right = 0.89
-	_go_retry_btn.anchor_top = 0.790
-	_go_retry_btn.anchor_bottom = 0.884
+	_go_retry_btn.anchor_top = 0.766
+	_go_retry_btn.anchor_bottom = 0.864
 	_go_retry_btn.offset_left = 0.0
 	_go_retry_btn.offset_right = 0.0
 	_go_retry_btn.offset_top = 0.0
 	_go_retry_btn.offset_bottom = 0.0
 	_go_retry_btn.pressed.connect(func() -> void: restart_requested.emit())
-	_gameover_overlay.add_child(_go_retry_btn)
+	go_safe.add_child(_go_retry_btn)
 
 func set_playing_ui_visible(vis: bool) -> void:
 	_top_hud.visible = vis
 	_minimap.visible = vis
 	_hint_panel.visible = vis
 	joystick.enabled = vis
+	_update_sound_btn_pos(vis)
 	if not vis:
 		_fever_pill.visible = false
 		_boost_pill.visible = false
@@ -286,6 +425,8 @@ func show_title(best_score: int) -> void:
 	_title_best_badge.visible = best_score > 0
 	_title_overlay.modulate.a = 1.0
 	_title_overlay.visible = true
+	if _title_start_btn != null:
+		_title_start_btn.play_appear()
 	_gameover_overlay.visible = false
 	_top_hud.visible = false
 	_minimap.visible = false
@@ -293,25 +434,21 @@ func show_title(best_score: int) -> void:
 	_fever_pill.visible = false
 	_boost_pill.visible = false
 	_status_pill.visible = false
-	# Keep joystick active on the live-meadow Home screen so moving starts immediately!
+	_update_sound_btn_pos(false)
 	joystick.has_moved_once = false
 	joystick.show_idle_ring = false
-	joystick.enabled = true
+	joystick.enabled = false
 
 func show_playing(from_home_drag: bool = false) -> void:
 	if _title_fade_tween != null and _title_fade_tween.is_valid():
 		_title_fade_tween.kill()
-	if from_home_drag and _title_overlay.visible:
-		_title_fade_tween = create_tween()
-		_title_fade_tween.tween_property(_title_overlay, "modulate:a", 0.0, 0.20)
-		_title_fade_tween.tween_callback(func() -> void: _title_overlay.visible = false)
-	else:
-		_title_overlay.visible = false
-		_title_overlay.modulate.a = 1.0
+	_title_overlay.visible = false
+	_title_overlay.modulate.a = 1.0
 	_gameover_overlay.visible = false
 	_top_hud.visible = true
 	_minimap.visible = true
 	_hint_panel.visible = not from_home_drag
+	_update_sound_btn_pos(true)
 	joystick.show_idle_ring = not from_home_drag
 	if not from_home_drag:
 		joystick.has_moved_once = false
