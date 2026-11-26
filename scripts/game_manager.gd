@@ -76,24 +76,60 @@ func _build_scene_nodes() -> void:
 	add_child(_camera)
 
 	_hud = GameHUD.new()
-	_hud.start_requested.connect(_start_game)
+	_hud.start_requested.connect(_begin_play_from_home)
 	_hud.restart_requested.connect(_start_game)
 	_hud.home_requested.connect(_return_to_title)
+	_hud.mute_toggled.connect(_on_mute_toggled)
 	_hud.star_landed.connect(func(idx: int) -> void: _sfx.play_star(idx))
 	add_child(_hud)
 	_hud.joystick.input_changed.connect(func(v: Vector2) -> void: _mower.joystick_input = v)
+
+func _input(event: InputEvent) -> void:
+	# Wake Web Audio & BGM on the very first user gesture (iOS Safari / Chrome requirement)
+	if event is InputEventScreenTouch and (event as InputEventScreenTouch).pressed:
+		_sfx.start_bgm(state == GameState.PLAYING)
+	elif event is InputEventMouseButton and (event as InputEventMouseButton).pressed:
+		_sfx.start_bgm(state == GameState.PLAYING)
+	elif event is InputEventKey and (event as InputEventKey).pressed:
+		_sfx.start_bgm(state == GameState.PLAYING)
+
+func _on_mute_toggled() -> void:
+	var muted := _sfx.toggle_mute()
+	_hud.set_muted_visual(muted)
 
 func _return_to_title() -> void:
 	_setup_round(false)
 	state = GameState.TITLE
 	_sfx.stop_engine()
+	_sfx.set_bgm_ducked(true)
 	_hud.show_title(best_score)
+
+func _begin_play_from_home() -> void:
+	if state != GameState.TITLE:
+		return
+	state = GameState.PLAYING
+	_mower.control_enabled = true
+	for a in _animals:
+		if is_instance_valid(a):
+			a.preview_mode = false
+	for fl in _flowers:
+		if is_instance_valid(fl):
+			fl.lifetime_paused = false
+	for bp in _boost_pickups:
+		if is_instance_valid(bp):
+			bp.lifetime_paused = false
+	# Cut the small circle directly under the starting mower position
+	_lawn.mow_circle(_mower.global_position, _mower.cut_radius * 0.9)
+	_hud.show_playing(true)
+	_sfx.start_bgm(true)
+	_sfx.start_engine()
 
 func _start_game() -> void:
 	_setup_round(true)
 	state = GameState.PLAYING
 	_mower.control_enabled = true
-	_hud.show_playing()
+	_hud.show_playing(false)
+	_sfx.start_bgm(true)
 	_sfx.start_engine()
 
 func _setup_round(clear_start_grass: bool) -> void:
@@ -129,8 +165,8 @@ func _setup_round(clear_start_grass: bool) -> void:
 	_special_popup_timer = 0.0
 
 	_generate_obstacles(rect, center)
-	_generate_animals(rect, center)
-	_spawn_initial_specials(center)
+	_generate_animals(rect, center, not clear_start_grass)
+	_spawn_initial_specials(center, not clear_start_grass)
 
 	if clear_start_grass:
 		# Cut the small circle directly under the starting mower position
@@ -165,7 +201,7 @@ func _generate_obstacles(rect: Rect2, safe_center: Vector2) -> void:
 			_lawn.mark_obstacle_circle(pos, rad + 2.0)
 			placed.append({"pos": pos, "rad": rad})
 
-func _generate_animals(rect: Rect2, safe_center: Vector2) -> void:
+func _generate_animals(rect: Rect2, safe_center: Vector2, is_preview: bool = false) -> void:
 	var types := [
 		LawnAnimal.AnimalType.SHEEP,
 		LawnAnimal.AnimalType.SHEEP,
@@ -185,13 +221,14 @@ func _generate_animals(rect: Rect2, safe_center: Vector2) -> void:
 			pos = Vector2(randf_range(120, rect.size.x - 120), randf_range(120, rect.size.y - 120))
 		var animal := LawnAnimal.new()
 		animal.setup(t, pos, rect, _mower)
+		animal.preview_mode = is_preview
 		animal.interfered_with_mower.connect(_on_animal_interfered)
 		animal.spawned_mud.connect(_on_pig_spawned_mud)
 		_world_objects.add_child(animal)
 		_animals.append(animal)
 		avoid.append({"pos": pos, "rad": 42.0})
 
-func _spawn_initial_specials(safe_center: Vector2) -> void:
+func _spawn_initial_specials(safe_center: Vector2, pause_lifetimes: bool = false) -> void:
 	# Spawn 4 special colored grass patches & 2 lucky flowers right away so players see them immediately!
 	var avoid := _collect_obstacle_positions()
 	avoid.append(safe_center)
@@ -202,10 +239,14 @@ func _spawn_initial_specials(safe_center: Vector2) -> void:
 			avoid.append(spot)
 
 	for _j in range(2):
-		_spawn_random_flower()
+		var fl := _spawn_random_flower()
+		if fl != null:
+			fl.lifetime_paused = pause_lifetimes
 
 	# Spawn 1 turbo boost pickup right at the start so the player can spot & grab it!
-	_spawn_random_boost_pickup()
+	var bp := _spawn_random_boost_pickup()
+	if bp != null:
+		bp.lifetime_paused = pause_lifetimes
 
 func _pick_non_overlapping_pos(rect: Rect2, edge_pad: float, safe_center: Vector2, safe_rad: float, existing: Array[Dictionary], min_clearance: float) -> Vector2:
 	for _attempt in range(60):
@@ -243,6 +284,13 @@ func _process(delta: float) -> void:
 		_shake_intensity = lerpf(_shake_intensity, 0.0, minf(delta * 10.0, 1.0))
 	else:
 		_camera.offset = Vector2.ZERO
+
+	if state == GameState.TITLE:
+		_sfx.update_engine(0.0, false, false)
+		var kb_vec := Input.get_vector("move_left", "move_right", "move_up", "move_down")
+		if _mower.joystick_input.length() > 0.12 or kb_vec.length() > 0.10:
+			_begin_play_from_home()
+		return
 
 	if state != GameState.PLAYING:
 		_sfx.update_engine(0.0, false, false)
@@ -361,7 +409,7 @@ func _spawn_random_special_grass() -> void:
 	if spot.x >= 0.0:
 		_lawn.spawn_special_patch(spot, randf_range(50.0, 72.0), randf() < 0.45)
 
-func _spawn_random_flower() -> void:
+func _spawn_random_flower() -> SpecialFlower:
 	var avoid := _collect_obstacle_positions()
 	avoid.append(_mower.global_position)
 	for fl in _flowers:
@@ -381,6 +429,7 @@ func _spawn_random_flower() -> void:
 	_flowers.append(fl)
 	# Also bless a small colorful turf circle beneath the flower!
 	_lawn.spawn_special_patch(spot, 44.0, true)
+	return fl
 
 func _on_flower_collected(fl: SpecialFlower) -> void:
 	flowers_harvested += 1
@@ -391,7 +440,7 @@ func _on_flower_collected(fl: SpecialFlower) -> void:
 	_mower.spawn_burst(fl.position, 18, fl.get_primary_color(), 190.0)
 	_spawn_floating_text("2× +%d" % bonus, fl.position + Vector2(0, -24), Color(1.0, 0.94, 0.28), 26, 1.15)
 
-func _spawn_random_boost_pickup() -> void:
+func _spawn_random_boost_pickup() -> BoostPickup:
 	var avoid := _collect_obstacle_positions()
 	avoid.append(_mower.global_position)
 	for fl in _flowers:
@@ -411,6 +460,7 @@ func _spawn_random_boost_pickup() -> void:
 	_world_objects.add_child(pickup)
 	_boost_pickups.append(pickup)
 	_boosts_spawned_total += 1
+	return pickup
 
 func _on_boost_pickup_collected(pickup: BoostPickup) -> void:
 	_mower.activate_boost(BOOST_DURATION, BOOST_DURATION * 1.6)
@@ -481,6 +531,7 @@ func _end_game() -> void:
 	state = GameState.GAME_OVER
 	_mower.control_enabled = false
 	_sfx.stop_engine()
+	_sfx.set_bgm_ducked(true)
 	_sfx.play_finish()
 
 	var is_new_record := score > best_score

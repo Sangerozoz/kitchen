@@ -14,8 +14,9 @@ var max_radius: float = 64.0
 var deadzone: float = 0.10
 var output: Vector2 = Vector2.ZERO
 var has_moved_once: bool = false
+var show_idle_ring: bool = true
 
-# Rect (in global screen coords) excluded from joystick touch capture (e.g. Boost button)
+# Rect (in global screen coords) excluded from joystick touch capture (e.g. Sound button)
 var excluded_rect: Rect2 = Rect2()
 
 var _active_touch_idx: int = -1
@@ -97,7 +98,7 @@ func _draw() -> void:
 		# Thumb knob
 		draw_circle(_knob_pos, 26.0, Color(1.0, 1.0, 1.0, 0.85))
 		draw_circle(_knob_pos, 18.0, Color(0.32, 0.78, 0.28, 0.92))
-	elif not has_moved_once:
+	elif show_idle_ring and not has_moved_once:
 		# Gentle resting hint indicator in lower center before first touch
 		var hint_center := Vector2(size.x * 0.5, size.y - 148.0)
 		var pulse := 1.0 + 0.06 * sin(Time.get_ticks_msec() * 0.005)
@@ -106,5 +107,5 @@ func _draw() -> void:
 		draw_circle(hint_center, 20.0, Color(1.0, 1.0, 1.0, 0.50))
 
 func _process(_delta: float) -> void:
-	if enabled and not _is_pressed and not has_moved_once:
+	if enabled and show_idle_ring and not _is_pressed and not has_moved_once:
 		queue_redraw()

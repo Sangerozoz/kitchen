@@ -9,6 +9,7 @@ signal spawned_mud(pos: Vector2)
 var animal_type: AnimalType = AnimalType.SHEEP
 var bounds: Rect2 = Rect2(60, 60, 900, 1400)
 var mower_ref: Node2D = null
+var preview_mode: bool = false
 
 var _state: String = "wander" # wander, pause, chase, flee
 var _state_timer: float = 2.0
@@ -61,13 +62,16 @@ func _physics_process(delta: float) -> void:
 		dist_to_mower = to_mower.length()
 
 	var speed := 0.0
-	match animal_type:
-		AnimalType.SHEEP:
-			speed = _update_sheep(delta, dist_to_mower, to_mower)
-		AnimalType.DOG:
-			speed = _update_dog(delta, dist_to_mower, to_mower)
-		AnimalType.PIG:
-			speed = _update_pig(delta, dist_to_mower, to_mower)
+	if preview_mode:
+		speed = _update_peaceful_wander(dist_to_mower, to_mower)
+	else:
+		match animal_type:
+			AnimalType.SHEEP:
+				speed = _update_sheep(delta, dist_to_mower, to_mower)
+			AnimalType.DOG:
+				speed = _update_dog(delta, dist_to_mower, to_mower)
+			AnimalType.PIG:
+				speed = _update_pig(delta, dist_to_mower, to_mower)
 
 	velocity = _move_dir * speed
 	if speed > 4.0:
@@ -93,8 +97,8 @@ func _physics_process(delta: float) -> void:
 		position.y = bounds.end.y
 		_move_dir.y = -absf(_move_dir.y)
 
-	# Check mower bump interference
-	if _hit_cooldown <= 0.0 and is_instance_valid(mower_ref):
+	# Check mower bump interference (disabled during Home screen peaceful preview)
+	if not preview_mode and _hit_cooldown <= 0.0 and is_instance_valid(mower_ref):
 		var contact_dist := _body_radius + 20.0
 		if dist_to_mower < contact_dist:
 			_hit_cooldown = 2.0
@@ -105,6 +109,36 @@ func _physics_process(delta: float) -> void:
 			_move_dir = (-push_dir).rotated(randf_range(-0.5, 0.5)).normalized()
 
 	queue_redraw()
+
+func _update_peaceful_wander(dist: float, to_mower: Vector2) -> float:
+	_alert_timer = 0.0
+	# Gently curve away from the parked mower so animals stroll around it peacefully
+	if dist < 115.0 and dist > 0.1:
+		var away := (-to_mower).normalized()
+		var tangent := away.rotated(0.55)
+		_move_dir = _move_dir.lerp(tangent, 0.16).normalized()
+		_state = "wander"
+		return 64.0
+	if _state == "pause":
+		if _state_timer <= 0.0:
+			_state = "wander"
+			_move_dir = Vector2.from_angle(randf() * TAU)
+			_state_timer = randf_range(2.0, 3.8)
+		return 0.0
+	if _state_timer <= 0.0:
+		if randf() < 0.30:
+			_state = "pause"
+			_state_timer = randf_range(1.0, 2.2)
+		else:
+			_move_dir = _move_dir.rotated(randf_range(-1.3, 1.3)).normalized()
+			_state_timer = randf_range(1.8, 3.4)
+	match animal_type:
+		AnimalType.DOG:
+			return 78.0
+		AnimalType.PIG:
+			return 64.0
+		_:
+			return 54.0
 
 func _update_sheep(_delta: float, _dist: float, _to_mower: Vector2) -> float:
 	if _state == "flee":

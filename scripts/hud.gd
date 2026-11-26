@@ -4,6 +4,7 @@ class_name GameHUD
 signal start_requested()
 signal restart_requested()
 signal home_requested()
+signal mute_toggled()
 signal star_landed(star_idx: int)
 
 var joystick: ThumbJoystick
@@ -19,11 +20,13 @@ var _status_pill: StatusComicPill
 
 var _hint_panel: PanelContainer
 var _minimap: MinimapWidget
+var _sound_btn: SoundToggleButton
 
 var _title_overlay: Control
 var _title_logo: TextureRect
-var _title_start_btn: GlossyStartButton
+var _title_drag_cue: HomeDragCue
 var _title_best_badge: CrownScoreBadge
+var _title_fade_tween: Tween
 
 var _gameover_overlay: Control
 var _go_card: GameOverCardWidget
@@ -137,30 +140,41 @@ func _build_ui() -> void:
 
 	_build_title_overlay(root)
 	_build_gameover_overlay(root)
+
+	# Compact cartoon Sound/BGM toggle button (bottom-right, always accessible)
+	_sound_btn = SoundToggleButton.new()
+	_sound_btn.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_sound_btn.offset_left = -64.0
+	_sound_btn.offset_right = -14.0
+	_sound_btn.offset_top = -66.0
+	_sound_btn.offset_bottom = -16.0
+	_sound_btn.pressed.connect(func() -> void: mute_toggled.emit())
+	root.add_child(_sound_btn)
+
 	set_playing_ui_visible(false)
 
+func _process(_delta: float) -> void:
+	if _sound_btn != null and joystick != null:
+		joystick.excluded_rect = _sound_btn.get_global_rect().grow(10.0)
+
+func set_muted_visual(muted: bool) -> void:
+	if _sound_btn != null:
+		_sound_btn.is_muted = muted
+		_sound_btn.queue_redraw()
+
 func _build_title_overlay(root: Control) -> void:
+	# Transparent live-meadow Home overlay! Touch/drag goes straight through to ThumbJoystick.
 	_title_overlay = Control.new()
 	_title_overlay.set_anchors_preset(Control.PRESET_FULL_RECT)
-	_title_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	_title_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	root.add_child(_title_overlay)
 
-	# Fullscreen portrait meadow background
-	var bg := TextureRect.new()
-	bg.set_anchors_preset(Control.PRESET_FULL_RECT)
-	bg.texture = load("res://assets/ui/start_bg.jpg")
-	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	bg.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
-	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_title_overlay.add_child(bg)
-
-	# Static Title Logo
+	# Static Title Logo floating cleanly at the top over the live meadow
 	_title_logo = TextureRect.new()
-	_title_logo.anchor_left = 0.03
-	_title_logo.anchor_right = 0.97
-	_title_logo.anchor_top = 0.035
-	_title_logo.anchor_bottom = 0.385
+	_title_logo.anchor_left = 0.08
+	_title_logo.anchor_right = 0.92
+	_title_logo.anchor_top = 0.025
+	_title_logo.anchor_bottom = 0.265
 	_title_logo.offset_left = 0.0
 	_title_logo.offset_right = 0.0
 	_title_logo.offset_top = 0.0
@@ -172,14 +186,14 @@ func _build_title_overlay(root: Control) -> void:
 	_title_logo.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_title_overlay.add_child(_title_logo)
 
-	# Visual Crown + Best Score badge above start button (real glossy crown PNG!)
+	# Compact Crown + Best Score badge neatly under the Logo
 	_title_best_badge = CrownScoreBadge.new()
 	_title_best_badge.cute_font = _cute_font
 	_title_best_badge.tex_crown = _tex_crown
-	_title_best_badge.anchor_left = 0.27
-	_title_best_badge.anchor_right = 0.73
-	_title_best_badge.anchor_top = 0.708
-	_title_best_badge.anchor_bottom = 0.768
+	_title_best_badge.anchor_left = 0.30
+	_title_best_badge.anchor_right = 0.70
+	_title_best_badge.anchor_top = 0.268
+	_title_best_badge.anchor_bottom = 0.318
 	_title_best_badge.offset_left = 0.0
 	_title_best_badge.offset_right = 0.0
 	_title_best_badge.offset_top = 0.0
@@ -187,20 +201,18 @@ func _build_title_overlay(root: Control) -> void:
 	_title_best_badge.visible = false
 	_title_overlay.add_child(_title_best_badge)
 
-	# Glossy Start Button with AI cartoon lettering
-	_title_start_btn = GlossyStartButton.new()
-	_title_start_btn.text = "开始割草"
-	_title_start_btn.art_texture = load("res://assets/ui/start_btn_text.png")
-	_title_start_btn.anchor_left = 0.11
-	_title_start_btn.anchor_right = 0.89
-	_title_start_btn.anchor_top = 0.786
-	_title_start_btn.anchor_bottom = 0.884
-	_title_start_btn.offset_left = 0.0
-	_title_start_btn.offset_right = 0.0
-	_title_start_btn.offset_top = 0.0
-	_title_start_btn.offset_bottom = 0.0
-	_title_start_btn.pressed.connect(func() -> void: start_requested.emit())
-	_title_overlay.add_child(_title_start_btn)
+	# Animated Visual Drag-to-Start Cue at the bottom (no button needed — just drag to mow!)
+	_title_drag_cue = HomeDragCue.new()
+	_title_drag_cue.cute_font = _cute_font
+	_title_drag_cue.anchor_left = 0.16
+	_title_drag_cue.anchor_right = 0.84
+	_title_drag_cue.anchor_top = 0.72
+	_title_drag_cue.anchor_bottom = 0.91
+	_title_drag_cue.offset_left = 0.0
+	_title_drag_cue.offset_right = 0.0
+	_title_drag_cue.offset_top = 0.0
+	_title_drag_cue.offset_bottom = 0.0
+	_title_overlay.add_child(_title_drag_cue)
 
 func _build_gameover_overlay(root: Control) -> void:
 	_gameover_overlay = ColorRect.new()
@@ -268,19 +280,42 @@ func set_playing_ui_visible(vis: bool) -> void:
 		_status_pill.visible = false
 
 func show_title(best_score: int) -> void:
+	if _title_fade_tween != null and _title_fade_tween.is_valid():
+		_title_fade_tween.kill()
 	_title_best_badge.set_score(best_score)
 	_title_best_badge.visible = best_score > 0
+	_title_overlay.modulate.a = 1.0
 	_title_overlay.visible = true
 	_gameover_overlay.visible = false
-	set_playing_ui_visible(false)
-	if _title_start_btn != null:
-		_title_start_btn.play_appear()
-
-func show_playing() -> void:
-	_title_overlay.visible = false
-	_gameover_overlay.visible = false
+	_top_hud.visible = false
+	_minimap.visible = false
+	_hint_panel.visible = false
+	_fever_pill.visible = false
+	_boost_pill.visible = false
+	_status_pill.visible = false
+	# Keep joystick active on the live-meadow Home screen so moving starts immediately!
 	joystick.has_moved_once = false
-	set_playing_ui_visible(true)
+	joystick.show_idle_ring = false
+	joystick.enabled = true
+
+func show_playing(from_home_drag: bool = false) -> void:
+	if _title_fade_tween != null and _title_fade_tween.is_valid():
+		_title_fade_tween.kill()
+	if from_home_drag and _title_overlay.visible:
+		_title_fade_tween = create_tween()
+		_title_fade_tween.tween_property(_title_overlay, "modulate:a", 0.0, 0.20)
+		_title_fade_tween.tween_callback(func() -> void: _title_overlay.visible = false)
+	else:
+		_title_overlay.visible = false
+		_title_overlay.modulate.a = 1.0
+	_gameover_overlay.visible = false
+	_top_hud.visible = true
+	_minimap.visible = true
+	_hint_panel.visible = not from_home_drag
+	joystick.show_idle_ring = not from_home_drag
+	if not from_home_drag:
+		joystick.has_moved_once = false
+	joystick.enabled = true
 
 func show_gameover(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool) -> void:
 	set_playing_ui_visible(false)
@@ -1277,3 +1312,126 @@ class GlossyStartButton extends Button:
 		draw_arc(rc, r, -PI * 0.5, PI * 0.5, 20, col, width, true)
 		draw_line(Vector2(lc.x, rect.position.y), Vector2(rc.x, rect.position.y), col, width, true)
 		draw_line(Vector2(lc.x, rect.end.y), Vector2(rc.x, rect.end.y), col, width, true)
+
+class HomeDragCue extends Control:
+	var cute_font: Font
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _process(_delta: float) -> void:
+		if is_visible_in_tree():
+			queue_redraw()
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		if w < 20.0 or h < 20.0:
+			return
+		var t := Time.get_ticks_msec() * 0.001
+		var cx := w * 0.5
+		var ring_y := h * 0.42
+		var track_rx := 52.0
+		var ring_r := 32.0
+
+		# Soft figure-8 / horizontal glide path showing "drag to steer"
+		var glide := sin(t * 2.5)
+		var knob_pos := Vector2(cx + glide * track_rx, ring_y + sin(t * 5.0) * 6.5)
+
+		# Subtle dotted arc track
+		for i in range(9):
+			var u := -1.0 + float(i) * 0.25
+			var px := cx + u * track_rx
+			var py := ring_y + sin(u * PI) * 5.0
+			draw_circle(Vector2(px, py), 3.4, Color(1.0, 0.98, 0.86, 0.42))
+
+		# Outer pulsing joystick halo
+		var pulse := 1.0 + 0.06 * sin(t * 4.2)
+		draw_circle(Vector2(cx, ring_y), ring_r * pulse, Color(0.10, 0.22, 0.06, 0.22))
+		draw_arc(Vector2(cx, ring_y), ring_r * pulse, 0.0, TAU, 36, Color(1.0, 0.98, 0.88, 0.65), 3.0, true)
+
+		# Gliding glossy golden thumb knob
+		draw_circle(knob_pos + Vector2(0.0, 4.0), 22.0, Color(0.12, 0.24, 0.04, 0.30))
+		draw_circle(knob_pos, 22.0, Color(0.36, 0.19, 0.04))
+		draw_circle(knob_pos, 18.8, Color(1.0, 0.72, 0.10))
+		draw_circle(knob_pos + Vector2(0.0, -2.0), 14.5, Color(1.0, 0.88, 0.30))
+		draw_circle(knob_pos + Vector2(-5.0, -6.0), 4.6, Color(1.0, 1.0, 0.94, 0.86))
+
+		# Ultra-concise cartoon pill label underneath: "拖动开始"
+		var pill_w := 134.0
+		var pill_h := 34.0
+		var px0 := cx - pill_w * 0.5
+		var py0 := ring_y + 44.0
+		var pr := pill_h * 0.5
+		_draw_pill(Rect2(px0, py0 + 3.0, pill_w, pill_h), pr, Color(0.10, 0.24, 0.05, 0.28))
+		_draw_pill(Rect2(px0, py0, pill_w, pill_h), pr, Color(1.0, 0.97, 0.86, 0.94))
+		_draw_pill_outline(Rect2(px0, py0, pill_w, pill_h), pr, Color(0.38, 0.22, 0.06, 0.92), 2.8)
+		var font := cute_font if cute_font != null else ThemeDB.fallback_font
+		draw_string(font, Vector2(px0, py0 + pill_h * 0.5 + 7.5), "拖动开始", HORIZONTAL_ALIGNMENT_CENTER, pill_w, 20, Color(0.30, 0.16, 0.04))
+
+	func _draw_pill(rect: Rect2, r: float, col: Color) -> void:
+		var lc := Vector2(rect.position.x + r, rect.position.y + rect.size.y * 0.5)
+		var rc := Vector2(rect.end.x - r, rect.position.y + rect.size.y * 0.5)
+		draw_circle(lc, r, col)
+		draw_circle(rc, r, col)
+		if rc.x > lc.x:
+			draw_rect(Rect2(lc.x, rect.position.y, rc.x - lc.x, rect.size.y), col)
+
+	func _draw_pill_outline(rect: Rect2, r: float, col: Color, width: float) -> void:
+		var lc := Vector2(rect.position.x + r, rect.position.y + rect.size.y * 0.5)
+		var rc := Vector2(rect.end.x - r, rect.position.y + rect.size.y * 0.5)
+		draw_arc(lc, r, PI * 0.5, PI * 1.5, 16, col, width, true)
+		draw_arc(rc, r, -PI * 0.5, PI * 0.5, 16, col, width, true)
+		draw_line(Vector2(lc.x, rect.position.y), Vector2(rc.x, rect.position.y), col, width, true)
+		draw_line(Vector2(lc.x, rect.end.y), Vector2(rc.x, rect.end.y), col, width, true)
+
+class SoundToggleButton extends Button:
+	var is_muted: bool = false
+	var _press_anim: float = 0.0
+
+	func _ready() -> void:
+		focus_mode = Control.FOCUS_NONE
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		var empty := StyleBoxEmpty.new()
+		add_theme_stylebox_override("normal", empty)
+		add_theme_stylebox_override("hover", empty)
+		add_theme_stylebox_override("pressed", empty)
+		add_theme_stylebox_override("focus", empty)
+
+	func _process(delta: float) -> void:
+		if not is_visible_in_tree():
+			return
+		var target := 1.0 if is_pressed() else 0.0
+		var next_val := lerpf(_press_anim, target, minf(delta * 18.0, 1.0))
+		if absf(next_val - _press_anim) > 0.002:
+			_press_anim = next_val
+			queue_redraw()
+
+	func _draw() -> void:
+		var r := minf(size.x, size.y) * 0.5 - 2.0
+		if r < 6.0:
+			return
+		var c := size * 0.5 + Vector2(0.0, _press_anim * 2.5)
+		# Cartoon cream-gold badge
+		draw_circle(c + Vector2(0.0, 3.5 - _press_anim * 2.0), r, Color(0.14, 0.28, 0.05, 0.32))
+		draw_circle(c, r, Color(0.36, 0.20, 0.05))
+		draw_circle(c, r - 2.6, Color(1.0, 0.96, 0.84) if not is_muted else Color(0.88, 0.86, 0.80))
+		draw_circle(c + Vector2(-r * 0.30, -r * 0.32), r * 0.20, Color(1.0, 1.0, 0.96, 0.72))
+
+		var ink := Color(0.32, 0.17, 0.04) if not is_muted else Color(0.55, 0.45, 0.38)
+		# Speaker cone
+		var cone := PackedVector2Array([
+			c + Vector2(-10.0, -4.5),
+			c + Vector2(-4.5, -4.5),
+			c + Vector2(2.5, -10.0),
+			c + Vector2(2.5, 10.0),
+			c + Vector2(-4.5, 4.5),
+			c + Vector2(-10.0, 4.5),
+		])
+		draw_colored_polygon(cone, ink)
+		if is_muted:
+			draw_line(c + Vector2(5.5, -5.5), c + Vector2(12.5, 5.5), Color(0.88, 0.24, 0.20), 2.8, true)
+			draw_line(c + Vector2(12.5, -5.5), c + Vector2(5.5, 5.5), Color(0.88, 0.24, 0.20), 2.8, true)
+		else:
+			draw_arc(c + Vector2(3.5, 0.0), 6.5, -0.72, 0.72, 10, Color(0.24, 0.66, 0.16), 2.6, true)
+			draw_arc(c + Vector2(3.5, 0.0), 10.5, -0.78, 0.78, 12, Color(0.24, 0.66, 0.16), 2.4, true)

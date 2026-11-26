@@ -2,7 +2,12 @@ extends Node
 class_name SfxManager
 
 const SAMPLE_RATE := 11025
+const BGM_PATH := "res://assets/audio/bgm_meadow.wav"
+const BGM_PLAY_DB := -11.5
+const BGM_IDLE_DB := -16.5
 
+var _bgm_player: AudioStreamPlayer
+var _bgm_target_db: float = BGM_IDLE_DB
 var _engine_player: AudioStreamPlayer
 var _sfx_players: Array[AudioStreamPlayer] = []
 var _sfx_cursor := 0
@@ -15,11 +20,22 @@ func _ready() -> void:
 	# Defer audio stream creation until first user gesture (important for iOS Safari Web Audio!)
 	pass
 
+func _process(delta: float) -> void:
+	if _bgm_player != null and _bgm_player.playing:
+		_bgm_player.volume_db = lerpf(_bgm_player.volume_db, _bgm_target_db, minf(delta * 4.5, 1.0))
+
 func _ensure_initialized() -> void:
 	if _initialized:
 		return
 	_initialized = true
 	_build_streams()
+
+	_bgm_player = AudioStreamPlayer.new()
+	var bgm_res: AudioStream = load(BGM_PATH)
+	if bgm_res != null:
+		_bgm_player.stream = bgm_res
+	_bgm_player.volume_db = _bgm_target_db
+	add_child(_bgm_player)
 
 	_engine_player = AudioStreamPlayer.new()
 	_engine_player.stream = _streams["engine"]
@@ -30,6 +46,35 @@ func _ensure_initialized() -> void:
 		var p := AudioStreamPlayer.new()
 		add_child(p)
 		_sfx_players.append(p)
+
+func start_bgm(is_playing_round: bool = true) -> void:
+	_bgm_target_db = BGM_PLAY_DB if is_playing_round else BGM_IDLE_DB
+	if _muted:
+		return
+	_ensure_initialized()
+	if _bgm_player != null and _bgm_player.stream != null and not _bgm_player.playing:
+		_bgm_player.volume_db = _bgm_target_db
+		_bgm_player.play()
+
+func set_bgm_ducked(ducked: bool) -> void:
+	_bgm_target_db = BGM_IDLE_DB if ducked else BGM_PLAY_DB
+
+func is_muted() -> bool:
+	return _muted
+
+func toggle_mute() -> bool:
+	_muted = not _muted
+	if _muted:
+		if _bgm_player != null and _bgm_player.playing:
+			_bgm_player.stop()
+		if _engine_player != null and _engine_player.playing:
+			_engine_player.stop()
+	else:
+		_ensure_initialized()
+		if _bgm_player != null and _bgm_player.stream != null and not _bgm_player.playing:
+			_bgm_player.volume_db = _bgm_target_db
+			_bgm_player.play()
+	return _muted
 
 func start_engine() -> void:
 	if _muted:

@@ -11,6 +11,7 @@ var collect_radius: float = 34.0
 var lifetime: float = 18.0
 var age: float = 0.0
 var is_collected: bool = false
+var lifetime_paused: bool = false
 
 var _phase: float = 0.0
 var _bloom_scale: float = 0.0
@@ -27,12 +28,13 @@ func _ready() -> void:
 func _process(delta: float) -> void:
 	if is_collected:
 		return
-	age += delta
 	_bloom_scale = minf(_bloom_scale + delta * 4.5, 1.0)
-	if age >= lifetime:
-		expired.emit(self)
-		queue_free()
-		return
+	if not lifetime_paused:
+		age += delta
+		if age >= lifetime:
+			expired.emit(self)
+			queue_free()
+			return
 	queue_redraw()
 
 func try_collect(mower_pos: Vector2, mower_radius: float) -> bool:
