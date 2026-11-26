@@ -273,6 +273,8 @@ func show_title(best_score: int) -> void:
 	_title_overlay.visible = true
 	_gameover_overlay.visible = false
 	set_playing_ui_visible(false)
+	if _title_start_btn != null:
+		_title_start_btn.play_appear()
 
 func show_playing() -> void:
 	_title_overlay.visible = false
@@ -1172,6 +1174,10 @@ class GlossyStartButton extends Button:
 	var cute_font: Font = null
 	var font_size_override: int = 38
 	var _press_anim: float = 0.0
+	var _appear_t: float = 0.0
+
+	func play_appear() -> void:
+		_appear_t = 0.0
 
 	func _ready() -> void:
 		focus_mode = Control.FOCUS_NONE
@@ -1188,6 +1194,7 @@ class GlossyStartButton extends Button:
 	func _process(delta: float) -> void:
 		if not is_visible_in_tree():
 			return
+		_appear_t = minf(1.0, _appear_t + delta * 3.8)
 		var target := 1.0 if is_pressed() else 0.0
 		_press_anim = lerpf(_press_anim, target, minf(delta * 18.0, 1.0))
 		queue_redraw()
@@ -1199,7 +1206,13 @@ class GlossyStartButton extends Button:
 			return
 
 		var t := Time.get_ticks_msec() * 0.001
-		var breathe := 1.0 + 0.012 * sin(t * 3.0) * (1.0 - _press_anim)
+		var pop_in := 1.0
+		if _appear_t < 1.0:
+			if _appear_t < 0.65:
+				pop_in = lerpf(0.72, 1.06, ease(_appear_t / 0.65, 0.35))
+			else:
+				pop_in = lerpf(1.06, 1.0, (_appear_t - 0.65) / 0.35)
+		var breathe := pop_in * (1.0 + 0.012 * sin(t * 3.0) * (1.0 - _press_anim))
 		var cx := w * 0.5
 		var cy := h * 0.5
 		var bw := w * breathe

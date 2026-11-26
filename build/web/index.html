@@ -4,6 +4,8 @@
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 	<title>来割草 不烧心</title>
+	<link rel="icon" type="image/png" href="app_icon.png">
+	<link rel="apple-touch-icon" href="app_icon.png">
 	<style>
 		html, body {
 			margin: 0;
@@ -11,8 +13,8 @@
 			width: 100%;
 			height: 100%;
 			overflow: hidden;
-			background: #16301b;
-			color: #eefbe8;
+			background: #67c934;
+			color: #3d2206;
 			font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
 			touch-action: none;
 			overscroll-behavior: none;
@@ -27,65 +29,108 @@
 			touch-action: none;
 		}
 		#canvas:focus { outline: none; }
+
+		/* Unified Loading + Start Splash: pixel-matched to Godot's Start Screen! */
 		#status {
 			position: fixed;
 			inset: 0;
-			background: radial-gradient(circle at 50% 35%, #234d28, #122616);
+			background: #67c934 url('start_bg.jpg') center center / cover no-repeat;
+			z-index: 10;
+			transition: opacity 0.18s ease-out;
+		}
+		#status.fade-out {
+			opacity: 0;
+			pointer-events: none;
+		}
+		#status.fade-out #load-slot {
+			opacity: 0;
+			transform: scale(0.95);
+			transition: opacity 0.10s ease-out, transform 0.12s ease-out;
+		}
+		#splash-logo {
+			position: fixed;
+			left: 3%;
+			width: 94%;
+			top: 3.5%;
+			height: 35%;
+			object-fit: contain;
+			pointer-events: none;
+		}
+		/* Loading bar sits in the EXACT same capsule slot as the "开始割草" button (top 78.6%..88.4%) */
+		#load-slot {
+			position: fixed;
+			left: 11%;
+			width: 78%;
+			top: 79.8%;
+			height: 7.4%;
+			min-height: 46px;
+			max-height: 68px;
 			display: flex;
 			flex-direction: column;
 			align-items: center;
 			justify-content: center;
-			padding: 24px;
-			box-sizing: border-box;
-			z-index: 10;
 		}
-		.title {
-			font-size: 28px;
-			font-weight: 700;
-			color: #ffef6b;
-			margin-bottom: 10px;
-			text-shadow: 0 2px 8px rgba(0,0,0,0.45);
-		}
-		.subtitle {
-			font-size: 14px;
-			color: #c2f0b8;
-			margin-bottom: 24px;
-		}
-		.bar-wrap {
-			width: 78%;
-			max-width: 300px;
-			height: 14px;
-			background: rgba(0,0,0,0.38);
-			border: 2px solid rgba(132,224,96,0.55);
+		.bar-shell {
+			position: relative;
+			width: 100%;
+			height: 100%;
+			background: rgba(255, 248, 224, 0.94);
+			border: 4px solid #4a2807;
 			border-radius: 999px;
+			box-shadow: 0 5px 0 #c86c00, 0 8px 16px rgba(24, 56, 8, 0.30);
 			overflow: hidden;
+			box-sizing: border-box;
 		}
 		#bar-fill {
-			width: 2%;
-			height: 100%;
-			background: linear-gradient(90deg, #4cd950, #ffe047);
+			position: absolute;
+			left: 0;
+			top: 0;
+			bottom: 0;
+			width: 6%;
+			background: linear-gradient(180deg, #ffee6a 0%, #ffc61a 55%, #ff9b00 100%);
 			border-radius: 999px;
-			transition: width 0.15s ease-out;
+			transition: width 0.16s ease-out;
+		}
+		#bar-fill::after {
+			content: "";
+			position: absolute;
+			left: 10px;
+			right: 10px;
+			top: 4px;
+			height: 30%;
+			border-radius: 999px;
+			background: rgba(255, 255, 232, 0.58);
 		}
 		#status-text {
-			margin-top: 14px;
-			font-size: 14px;
-			color: #dff7d8;
-			text-align: center;
+			position: relative;
+			z-index: 2;
+			width: 100%;
+			height: 100%;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			font-size: 20px;
+			font-weight: 800;
+			color: #3d2004;
+			text-shadow: 0 1px 0 rgba(255, 246, 180, 0.85);
+			letter-spacing: 1px;
 		}
 		#status-notice {
 			display: none;
-			margin-top: 18px;
-			max-width: 90%;
+			position: fixed;
+			left: 8%;
+			right: 8%;
+			bottom: 22%;
 			padding: 12px 16px;
-			border-radius: 12px;
-			background: rgba(120, 28, 28, 0.9);
-			border: 1px solid rgba(255, 130, 120, 0.7);
-			color: #ffe8e6;
-			font-size: 13px;
+			border-radius: 16px;
+			background: rgba(120, 28, 28, 0.92);
+			border: 2px solid rgba(255, 160, 145, 0.85);
+			color: #fff0ee;
+			font-size: 14px;
 			line-height: 1.5;
 			word-break: break-word;
-			text-align: left;
+			text-align: center;
+			z-index: 20;
 		}
 	</style>
 	<link id="-gd-engine-icon" rel="icon" type="image/png" href="index.icon.png" />
@@ -95,17 +140,20 @@
 <body>
 	<canvas id="canvas">您的浏览器不支持 WebGL2 Canvas。</canvas>
 	<div id="status">
-		<div class="title">来割草 不烧心</div>
-		<div class="subtitle">移动端竖屏割草挑战</div>
-		<div class="bar-wrap"><div id="bar-fill"></div></div>
-		<div id="status-text">正在连接并加载游戏资源...</div>
+		<img id="splash-logo" src="title_logo.png" alt="来割草 不烧心">
+		<div id="load-slot">
+			<div class="bar-shell">
+				<div id="bar-fill"></div>
+				<div id="status-text">0%</div>
+			</div>
+		</div>
 		<div id="status-notice"></div>
 	</div>
 
 	<script src="index.js"></script>
 	<script>
 	(function () {
-		const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":3003896,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+		const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":3710668,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 		const GODOT_THREADS_ENABLED = false;
 		const statusOverlay = document.getElementById('status');
 		const barFill = document.getElementById('bar-fill');
@@ -115,7 +163,7 @@
 		function showError(msg) {
 			statusNotice.style.display = 'block';
 			statusNotice.textContent = String(msg);
-			statusText.textContent = '加载遇到问题';
+			statusText.textContent = '!';
 		}
 
 		window.addEventListener('error', function (e) {
@@ -136,20 +184,22 @@
 			onProgress: function (current, total) {
 				if (current > 0 && total > 0) {
 					const pct = Math.min(100, Math.round((current / total) * 100));
-					barFill.style.width = Math.max(4, pct) + '%';
-					const curMB = (current / 1048576).toFixed(1);
-					const totMB = (total / 1048576).toFixed(1);
-					if (pct >= 100) {
-						statusText.textContent = '下载完成，正在启动游戏引擎...';
-					} else {
-						statusText.textContent = '正在加载游戏 ' + pct + '% (' + curMB + ' / ' + totMB + ' MB)';
-					}
-				} else {
-					statusText.textContent = '正在初始化 WebGL2 与引擎...';
+					barFill.style.width = Math.max(8, pct) + '%';
+					statusText.textContent = pct + '%';
 				}
 			}
 		}).then(function () {
-			statusOverlay.remove();
+			barFill.style.width = '100%';
+			statusText.textContent = '100%';
+			// Wait 2 animation frames so Godot's matching start screen renders before seamless cross-fade!
+			requestAnimationFrame(function () {
+				requestAnimationFrame(function () {
+					statusOverlay.classList.add('fade-out');
+					setTimeout(function () {
+						statusOverlay.remove();
+					}, 320);
+				});
+			});
 		}).catch(function (err) {
 			showError(err && err.message ? err.message : err);
 		});
