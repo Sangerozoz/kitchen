@@ -3,13 +3,15 @@ class_name GameHUD
 
 signal start_requested()
 signal start_ad_requested()
-signal revive_ad_requested()
+signal double_coins_ad_requested()
+signal garage_requested()
 signal restart_requested()
 signal home_requested()
 signal mute_toggled()
 signal star_landed(star_idx: int)
 
 var joystick: ThumbJoystick
+var garage: GarageOverlay
 
 var _cute_font: Font
 var _ui_font: Font
@@ -18,6 +20,8 @@ var _top_hud: TopHudWidget
 var _buff_stack: VBoxContainer
 var _fever_pill: BuffPillWidget
 var _boost_pill: BuffPillWidget
+var _shield_pill: BuffPillWidget
+var _whirlwind_pill: BuffPillWidget
 var _status_pill: StatusComicPill
 
 var _hint_panel: PanelContainer
@@ -27,8 +31,11 @@ var _sound_btn: SoundToggleButton
 var _title_overlay: Control
 var _title_logo: TextureRect
 var _title_start_btn: GlossyStartButton
+var _title_garage_btn: GarageEntryButton
 var _title_ad_btn: RewardAdButton
 var _title_best_badge: CrownScoreBadge
+var _title_coin_pill: PanelContainer
+var _title_coin_lbl: Label
 var _title_fade_tween: Tween
 
 var _safe_containers: Array[Control] = []
@@ -40,7 +47,8 @@ var _safe_right: float = 0.0
 
 var _gameover_overlay: Control
 var _go_card: GameOverCardWidget
-var _go_revive_btn: RewardAdButton
+var _go_double_coins_btn: RewardAdButton
+var _go_garage_btn: GarageEntryButton
 var _go_retry_btn: GlossyStartButton
 var _go_home_btn: RoundBackButton
 var _toast_banner: ToastBanner
@@ -52,6 +60,10 @@ var _tex_clock: Texture2D
 var _tex_star_gold: Texture2D
 var _tex_star_empty: Texture2D
 var _tex_harvest_title: Texture2D
+var _tex_coin: Texture2D
+var _tex_boost_orb: Texture2D
+var _tex_skill_shield: Texture2D
+var _tex_skill_whirlwind: Texture2D
 
 func _ready() -> void:
 	layer = 20
@@ -76,6 +88,10 @@ func _load_assets() -> void:
 	_tex_star_gold = load("res://assets/ui/star_gold.png")
 	_tex_star_empty = load("res://assets/ui/star_empty.png")
 	_tex_harvest_title = load("res://assets/ui/harvest_title.png")
+	_tex_coin = load("res://assets/sprites/icon_coin.png")
+	_tex_boost_orb = load("res://assets/sprites/pickup_boost.png")
+	_tex_skill_shield = load("res://assets/sprites/skill_shield.png")
+	_tex_skill_whirlwind = load("res://assets/sprites/skill_whirlwind.png")
 
 func _make_safe_container(parent: Control) -> Control:
 	var box := Control.new()
@@ -129,10 +145,22 @@ func _build_ui() -> void:
 	_buff_stack.add_child(_fever_pill)
 
 	_boost_pill = BuffPillWidget.new()
-	_boost_pill.setup_style(BuffPillWidget.Style.RAINBOW_BOOST, _cute_font, null)
+	_boost_pill.setup_style(BuffPillWidget.Style.RAINBOW_BOOST, _cute_font, _tex_boost_orb)
 	_boost_pill.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	_boost_pill.visible = false
 	_buff_stack.add_child(_boost_pill)
+
+	_shield_pill = BuffPillWidget.new()
+	_shield_pill.setup_style(BuffPillWidget.Style.SHIELD, _cute_font, _tex_skill_shield)
+	_shield_pill.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_shield_pill.visible = false
+	_buff_stack.add_child(_shield_pill)
+
+	_whirlwind_pill = BuffPillWidget.new()
+	_whirlwind_pill.setup_style(BuffPillWidget.Style.WHIRLWIND, _cute_font, _tex_skill_whirlwind)
+	_whirlwind_pill.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	_whirlwind_pill.visible = false
+	_buff_stack.add_child(_whirlwind_pill)
 
 	_status_pill = StatusComicPill.new()
 	_status_pill.cute_font = _cute_font
@@ -142,11 +170,12 @@ func _build_ui() -> void:
 
 	# --- TOP-LEFT CARTOON MINIMAP (right below top HUD grass pill, clear of notch!) ---
 	_minimap = MinimapWidget.new()
+	_minimap.cute_font = _cute_font
 	_minimap.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_minimap.offset_left = 14.0
 	_minimap.offset_right = 102.0
 	_minimap.offset_top = 78.0
-	_minimap.offset_bottom = 210.0
+	_minimap.offset_bottom = 204.0
 	hud_safe.add_child(_minimap)
 
 	# --- ULTRA-COMPACT TOUCH HINT PILL (well above bottom safe margin) ---
@@ -166,8 +195,8 @@ func _build_ui() -> void:
 	_build_title_overlay(root)
 	_build_gameover_overlay(root)
 
-	# Topmost safe layer so top-right Sound/BGM toggle & toast stay accessible across Title, Playing, and GameOver
-	var top_controls_safe := _make_safe_container(root)
+	# Sound toggle layer (accessible on Title, Playing, and GameOver)
+	var sound_safe := _make_safe_container(root)
 	_sound_btn = SoundToggleButton.new()
 	_sound_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
 	_sound_btn.offset_left = -78.0
@@ -175,8 +204,15 @@ func _build_ui() -> void:
 	_sound_btn.offset_top = 8.0
 	_sound_btn.offset_bottom = 72.0
 	_sound_btn.pressed.connect(func() -> void: mute_toggled.emit())
-	top_controls_safe.add_child(_sound_btn)
+	sound_safe.add_child(_sound_btn)
 
+	# Fullscreen Garage modal sits cleanly above sound button
+	garage = GarageOverlay.new()
+	garage.cute_font = _cute_font
+	root.add_child(garage)
+
+	# Topmost toast banner stays visible even over Garage modal!
+	var toast_safe := _make_safe_container(root)
 	_toast_banner = ToastBanner.new()
 	_toast_banner.cute_font = _cute_font
 	_toast_banner.anchor_left = 0.08
@@ -186,7 +222,7 @@ func _build_ui() -> void:
 	_toast_banner.offset_top = -24.0
 	_toast_banner.offset_bottom = 24.0
 	_toast_banner.visible = false
-	top_controls_safe.add_child(_toast_banner)
+	toast_safe.add_child(_toast_banner)
 
 	set_playing_ui_visible(false)
 
@@ -273,6 +309,8 @@ func _apply_safe_area() -> void:
 	if joystick != null:
 		joystick.top_exclude_y = _safe_top + 78.0
 		joystick.bottom_safe_margin = _safe_bottom
+	if garage != null:
+		garage.set_safe_insets(_safe_top, _safe_bottom, _safe_left, _safe_right)
 
 func _update_sound_btn_pos(in_gameplay: bool) -> void:
 	if _sound_btn == null:
@@ -319,6 +357,29 @@ func _build_title_overlay(root: Control) -> void:
 
 	var title_safe := _make_safe_container(_title_overlay)
 
+	# Top-left Coin Wallet Pill (symmetric with top-right Sound button!)
+	_title_coin_pill = _make_pill_panel(Color(1.0, 0.92, 0.44, 0.96), Color(0.42, 0.22, 0.04, 0.95), 8)
+	_title_coin_pill.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_title_coin_pill.offset_left = 14.0
+	_title_coin_pill.offset_right = 166.0
+	_title_coin_pill.offset_top = 14.0
+	_title_coin_pill.offset_bottom = 58.0
+	title_safe.add_child(_title_coin_pill)
+	var coin_row := HBoxContainer.new()
+	coin_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	coin_row.add_theme_constant_override("separation", 6)
+	_title_coin_pill.add_child(coin_row)
+	if _tex_coin != null:
+		var coin_ic := TextureRect.new()
+		coin_ic.texture = _tex_coin
+		coin_ic.custom_minimum_size = Vector2(28.0, 28.0)
+		coin_ic.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		coin_ic.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+		coin_row.add_child(coin_ic)
+	_title_coin_lbl = _make_label("0", 21, Color(0.30, 0.14, 0.02), HORIZONTAL_ALIGNMENT_CENTER, true)
+	_title_coin_lbl.add_theme_constant_override("outline_size", 0)
+	coin_row.add_child(_title_coin_lbl)
+
 	# Static Title Logo framed cleanly in upper sky inside safe area
 	_title_logo = TextureRect.new()
 	_title_logo.anchor_left = 0.05
@@ -359,7 +420,7 @@ func _build_title_overlay(root: Control) -> void:
 	_title_start_btn.anchor_left = 0.11
 	_title_start_btn.anchor_right = 0.89
 	_title_start_btn.anchor_top = 0.770
-	_title_start_btn.anchor_bottom = 0.865
+	_title_start_btn.anchor_bottom = 0.862
 	_title_start_btn.offset_left = 0.0
 	_title_start_btn.offset_right = 0.0
 	_title_start_btn.offset_top = 0.0
@@ -367,15 +428,30 @@ func _build_title_overlay(root: Control) -> void:
 	_title_start_btn.pressed.connect(func() -> void: start_requested.emit())
 	title_safe.add_child(_title_start_btn)
 
-	# Optional Rewarded Video Start Buff Button (clearly separated below Start button)
+	# Secondary Row below Start: Left = Garage Upgrade Entry, Right = Optional Rewarded Video Start Buff
+	_title_garage_btn = GarageEntryButton.new()
+	_title_garage_btn.text = "车库升级"
+	_title_garage_btn.cute_font = _cute_font
+	_title_garage_btn.font_size_override = 21
+	_title_garage_btn.anchor_left = 0.09
+	_title_garage_btn.anchor_right = 0.47
+	_title_garage_btn.anchor_top = 0.888
+	_title_garage_btn.anchor_bottom = 0.960
+	_title_garage_btn.offset_left = 0.0
+	_title_garage_btn.offset_right = 0.0
+	_title_garage_btn.offset_top = 0.0
+	_title_garage_btn.offset_bottom = 0.0
+	_title_garage_btn.pressed.connect(func() -> void: garage_requested.emit())
+	title_safe.add_child(_title_garage_btn)
+
 	_title_ad_btn = RewardAdButton.new()
-	_title_ad_btn.text = "看视频 · 开局冲刺+2×"
+	_title_ad_btn.text = "开局冲刺+2×"
 	_title_ad_btn.cute_font = _cute_font
-	_title_ad_btn.font_size_override = 22
-	_title_ad_btn.anchor_left = 0.14
-	_title_ad_btn.anchor_right = 0.86
-	_title_ad_btn.anchor_top = 0.890
-	_title_ad_btn.anchor_bottom = 0.962
+	_title_ad_btn.font_size_override = 19
+	_title_ad_btn.anchor_left = 0.50
+	_title_ad_btn.anchor_right = 0.91
+	_title_ad_btn.anchor_top = 0.888
+	_title_ad_btn.anchor_bottom = 0.960
 	_title_ad_btn.offset_left = 0.0
 	_title_ad_btn.offset_right = 0.0
 	_title_ad_btn.offset_top = 0.0
@@ -401,6 +477,7 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_card.tex_grass = _tex_grass
 	_go_card.tex_flower = _tex_flower
 	_go_card.tex_crown = _tex_crown
+	_go_card.tex_coin = _tex_coin
 	_go_card.star_landed.connect(func(idx: int) -> void: star_landed.emit(idx))
 	_go_card.anchor_left = 0.08
 	_go_card.anchor_right = 0.92
@@ -412,26 +489,26 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_card.offset_bottom = 0.0
 	go_safe.add_child(_go_card)
 
-	# Rewarded Video Continue Button (+20s + Rainbow Boost, max 1x per round)
-	_go_revive_btn = RewardAdButton.new()
-	_go_revive_btn.text = "看视频 · 续时+20秒"
-	_go_revive_btn.cute_font = _cute_font
-	_go_revive_btn.font_size_override = 26
-	_go_revive_btn.anchor_left = 0.11
-	_go_revive_btn.anchor_right = 0.89
-	_go_revive_btn.anchor_top = 0.716
-	_go_revive_btn.anchor_bottom = 0.806
-	_go_revive_btn.offset_left = 0.0
-	_go_revive_btn.offset_right = 0.0
-	_go_revive_btn.offset_top = 0.0
-	_go_revive_btn.offset_bottom = 0.0
-	_go_revive_btn.pressed.connect(func() -> void: revive_ad_requested.emit())
-	go_safe.add_child(_go_revive_btn)
+	# Sole High-Intent Settlement Rewarded Video Button: Double Round Coins (2x)!
+	_go_double_coins_btn = RewardAdButton.new()
+	_go_double_coins_btn.text = "看视频 · 金币×2"
+	_go_double_coins_btn.cute_font = _cute_font
+	_go_double_coins_btn.font_size_override = 24
+	_go_double_coins_btn.anchor_left = 0.10
+	_go_double_coins_btn.anchor_right = 0.90
+	_go_double_coins_btn.anchor_top = 0.716
+	_go_double_coins_btn.anchor_bottom = 0.806
+	_go_double_coins_btn.offset_left = 0.0
+	_go_double_coins_btn.offset_right = 0.0
+	_go_double_coins_btn.offset_top = 0.0
+	_go_double_coins_btn.offset_bottom = 0.0
+	_go_double_coins_btn.pressed.connect(func() -> void: double_coins_ad_requested.emit())
+	go_safe.add_child(_go_double_coins_btn)
 
-	# Clean Floating Action Row right below the card (safe bottom margin!)
+	# Clean Floating Action Row: Back | Garage Upgrade | Retry
 	_go_home_btn = RoundBackButton.new()
-	_go_home_btn.anchor_left = 0.11
-	_go_home_btn.anchor_right = 0.27
+	_go_home_btn.anchor_left = 0.08
+	_go_home_btn.anchor_right = 0.22
 	_go_home_btn.anchor_top = 0.834
 	_go_home_btn.anchor_bottom = 0.926
 	_go_home_btn.offset_left = 0.0
@@ -441,12 +518,27 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_home_btn.pressed.connect(func() -> void: home_requested.emit())
 	go_safe.add_child(_go_home_btn)
 
+	_go_garage_btn = GarageEntryButton.new()
+	_go_garage_btn.text = "车库"
+	_go_garage_btn.cute_font = _cute_font
+	_go_garage_btn.font_size_override = 22
+	_go_garage_btn.anchor_left = 0.25
+	_go_garage_btn.anchor_right = 0.49
+	_go_garage_btn.anchor_top = 0.834
+	_go_garage_btn.anchor_bottom = 0.926
+	_go_garage_btn.offset_left = 0.0
+	_go_garage_btn.offset_right = 0.0
+	_go_garage_btn.offset_top = 0.0
+	_go_garage_btn.offset_bottom = 0.0
+	_go_garage_btn.pressed.connect(func() -> void: garage_requested.emit())
+	go_safe.add_child(_go_garage_btn)
+
 	_go_retry_btn = GlossyStartButton.new()
 	_go_retry_btn.text = "再来一局"
 	_go_retry_btn.cute_font = _cute_font
-	_go_retry_btn.font_size_override = 34
-	_go_retry_btn.anchor_left = 0.30
-	_go_retry_btn.anchor_right = 0.89
+	_go_retry_btn.font_size_override = 30
+	_go_retry_btn.anchor_left = 0.52
+	_go_retry_btn.anchor_right = 0.92
 	_go_retry_btn.anchor_top = 0.832
 	_go_retry_btn.anchor_bottom = 0.928
 	_go_retry_btn.offset_left = 0.0
@@ -465,23 +557,40 @@ func set_playing_ui_visible(vis: bool) -> void:
 	if not vis:
 		_fever_pill.visible = false
 		_boost_pill.visible = false
+		_shield_pill.visible = false
+		_whirlwind_pill.visible = false
 		_status_pill.visible = false
 
-func show_title(best_score: int) -> void:
+func update_wallet_ui(coins: int, has_affordable: bool) -> void:
+	if _title_coin_lbl != null:
+		_title_coin_lbl.text = "%d" % coins
+	if _title_garage_btn != null:
+		_title_garage_btn.show_red_dot = has_affordable
+		_title_garage_btn.queue_redraw()
+	if _go_garage_btn != null:
+		_go_garage_btn.show_red_dot = has_affordable
+		_go_garage_btn.queue_redraw()
+
+func show_title(best_score: int, coins: int = 0, has_affordable: bool = false) -> void:
 	if _title_fade_tween != null and _title_fade_tween.is_valid():
 		_title_fade_tween.kill()
 	_title_best_badge.set_score(best_score)
 	_title_best_badge.visible = best_score > 0
+	update_wallet_ui(coins, has_affordable)
 	_title_overlay.modulate.a = 1.0
 	_title_overlay.visible = true
 	if _title_start_btn != null:
 		_title_start_btn.play_appear()
+	if garage != null:
+		garage.visible = false
 	_gameover_overlay.visible = false
 	_top_hud.visible = false
 	_minimap.visible = false
 	_hint_panel.visible = false
 	_fever_pill.visible = false
 	_boost_pill.visible = false
+	_shield_pill.visible = false
+	_whirlwind_pill.visible = false
 	_status_pill.visible = false
 	_update_sound_btn_pos(false)
 	joystick.has_moved_once = false
@@ -494,6 +603,8 @@ func show_playing(from_home_drag: bool = false) -> void:
 	_title_overlay.visible = false
 	_title_overlay.modulate.a = 1.0
 	_gameover_overlay.visible = false
+	if garage != null:
+		garage.visible = false
 	_top_hud.visible = true
 	_minimap.visible = true
 	_hint_panel.visible = not from_home_drag
@@ -503,30 +614,35 @@ func show_playing(from_home_drag: bool = false) -> void:
 		joystick.has_moved_once = false
 	joystick.enabled = true
 
-func show_gameover(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool, can_revive: bool = true) -> void:
+func show_gameover(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool, earned_coins: int = 0, yards_cleared: int = 0, total_coins: int = 0, has_affordable: bool = false) -> void:
 	set_playing_ui_visible(false)
 	_title_overlay.visible = false
 	_gameover_overlay.visible = true
-	_go_card.set_results(score, area_ratio, sq_m, special_cells, flowers_count, best_score, is_new_record)
-	if _go_revive_btn != null:
-		_go_revive_btn.visible = can_revive
-		_go_revive_btn.set_loading(false)
-		if can_revive:
-			_go_home_btn.anchor_top = 0.834
-			_go_home_btn.anchor_bottom = 0.926
-			_go_retry_btn.anchor_top = 0.832
-			_go_retry_btn.anchor_bottom = 0.928
-		else:
-			_go_home_btn.anchor_top = 0.746
-			_go_home_btn.anchor_bottom = 0.840
-			_go_retry_btn.anchor_top = 0.744
-			_go_retry_btn.anchor_bottom = 0.842
+	_go_card.set_results(score, area_ratio, sq_m, special_cells, flowers_count, best_score, is_new_record, yards_cleared, earned_coins)
+	update_wallet_ui(total_coins, has_affordable)
+	if _go_double_coins_btn != null:
+		_go_double_coins_btn.visible = earned_coins > 0
+		_go_double_coins_btn.disabled = false
+		_go_double_coins_btn.set_loading(false)
+		_go_double_coins_btn.text = "看视频 · 金币×2"
+		_go_double_coins_btn.queue_redraw()
+
+func mark_double_coins_claimed(total_earned_after_double: int) -> void:
+	if _go_card != null:
+		_go_card.set_earned_coins(total_earned_after_double)
+	if _go_double_coins_btn != null:
+		_go_double_coins_btn.set_loading(false)
+		_go_double_coins_btn.disabled = true
+		_go_double_coins_btn.text = "已领取双倍金币!"
+		_go_double_coins_btn.queue_redraw()
 
 func set_ad_buttons_loading(loading: bool) -> void:
 	if _title_ad_btn != null:
 		_title_ad_btn.set_loading(loading)
-	if _go_revive_btn != null:
-		_go_revive_btn.set_loading(loading)
+	if _go_double_coins_btn != null and not _go_double_coins_btn.disabled:
+		_go_double_coins_btn.set_loading(loading)
+	if garage != null:
+		garage.set_ad_loading(loading)
 
 func show_toast(msg: String, is_positive: bool = false) -> void:
 	if _toast_banner != null:
@@ -540,7 +656,11 @@ func update_hud(
 	fever_max: float,
 	boost_time: float,
 	boost_max: float,
-	status_code: String
+	status_code: String,
+	shield_time: float = 0.0,
+	shield_max: float = 4.0,
+	whirlwind_time: float = 0.0,
+	whirlwind_max: float = 4.0
 ) -> void:
 	_top_hud.set_values(area_ratio, time_left, score, fever_time > 0.0)
 
@@ -556,6 +676,18 @@ func update_hud(
 	else:
 		_boost_pill.visible = false
 
+	if shield_time > 0.0:
+		_shield_pill.visible = true
+		_shield_pill.set_progress("护盾 %.1fs" % shield_time, clampf(shield_time / maxf(shield_max, 0.1), 0.0, 1.0))
+	else:
+		_shield_pill.visible = false
+
+	if whirlwind_time > 0.0:
+		_whirlwind_pill.visible = true
+		_whirlwind_pill.set_progress("旋风 %.1fs" % whirlwind_time, clampf(whirlwind_time / maxf(whirlwind_max, 0.1), 0.0, 1.0))
+	else:
+		_whirlwind_pill.visible = false
+
 	if status_code != "":
 		_status_pill.visible = true
 		_status_pill.set_status(status_code)
@@ -569,8 +701,8 @@ func hide_touch_hint() -> void:
 	if _hint_panel != null:
 		_hint_panel.visible = false
 
-func update_minimap(tex: Texture2D, field_size: Vector2, mower_pos: Vector2, mower_angle: float, flowers: Array, boosts: Array, animals: Array) -> void:
-	_minimap.set_data(tex, field_size, mower_pos, mower_angle, flowers, boosts, animals)
+func update_minimap(tex: Texture2D, field_size: Vector2, mower_pos: Vector2, mower_angle: float, flowers: Array, boosts: Array, animals: Array, yard_level: int = 1) -> void:
+	_minimap.set_data(tex, field_size, mower_pos, mower_angle, flowers, boosts, animals, yard_level)
 
 func _make_pill_panel(bg: Color, border: Color, pad: int = 10) -> PanelContainer:
 	var p := PanelContainer.new()
@@ -671,12 +803,13 @@ class TopHudWidget extends Control:
 			draw_texture_rect(tex_grass, Rect2(left_rect.position.x + 8.0, left_rect.position.y + 4.0, 32.0, 32.0), false)
 		var area_str := "%.1f%%" % (_area * 100.0)
 		_draw_outlined_text(font, area_str, Vector2(left_rect.position.x + 38.0, left_rect.position.y + 29.0), left_rect.size.x - 46.0, 22, Color(0.18, 0.46, 0.12), Color(1.0, 0.99, 0.92, 0.85))
-		# Slim progress bar inside lower rim of left pill
+		# Slim progress bar inside lower rim of left pill (turns golden when nearing 100% clear!)
 		var bar_r := Rect2(left_rect.position.x + 14.0, left_rect.end.y - 10.5, left_rect.size.x - 28.0, 6.0)
 		_draw_capsule(bar_r, 3.0, Color(0.84, 0.88, 0.72))
 		if _area > 0.005:
 			var fill_w := maxf(6.0, bar_r.size.x * _area)
-			_draw_capsule(Rect2(bar_r.position.x, bar_r.position.y, fill_w, bar_r.size.y), 3.0, Color(0.36, 0.82, 0.20))
+			var bar_col := Color(1.0, 0.74, 0.12) if _area >= 0.85 else Color(0.36, 0.82, 0.20)
+			_draw_capsule(Rect2(bar_r.position.x, bar_r.position.y, fill_w, bar_r.size.y), 3.0, bar_col)
 
 		# 2. CENTER BADGE: Sunny Golden Clock Capsule + Real Glossy Clock Icon!
 		var secs := int(ceil(_time_left))
@@ -787,7 +920,7 @@ class TopHudWidget extends Control:
 # CARTOON GLOSSY BUFF PILL (2x Flower Fever & Rainbow Sprint Power-up)
 # ==============================================================================
 class BuffPillWidget extends Control:
-	enum Style { FEVER, RAINBOW_BOOST }
+	enum Style { FEVER, RAINBOW_BOOST, SHIELD, WHIRLWIND }
 
 	const RAINBOW := [
 		Color(1.0, 0.28, 0.34),
@@ -826,9 +959,29 @@ class BuffPillWidget extends Control:
 		var r := h * 0.5
 		var font := _font if _font != null else ThemeDB.fallback_font
 
-		var bg := Color(1.0, 0.94, 0.72, 0.95) if _style == Style.FEVER else Color(0.95, 0.98, 1.0, 0.95)
-		var border := Color(0.86, 0.42, 0.08) if _style == Style.FEVER else Color(0.30, 0.18, 0.06)
-		var lip := Color(0.90, 0.56, 0.10) if _style == Style.FEVER else Color(0.24, 0.70, 0.86)
+		var bg := Color(1.0, 0.94, 0.72, 0.95)
+		var border := Color(0.86, 0.42, 0.08)
+		var lip := Color(0.90, 0.56, 0.10)
+		var bar_col := Color(1.0, 0.62, 0.12)
+		var txt_col := Color(0.46, 0.18, 0.04)
+		match _style:
+			Style.RAINBOW_BOOST:
+				bg = Color(0.95, 0.98, 1.0, 0.95)
+				border = Color(0.30, 0.18, 0.06)
+				lip = Color(0.24, 0.70, 0.86)
+				txt_col = Color(0.14, 0.34, 0.48)
+			Style.SHIELD:
+				bg = Color(0.88, 0.98, 1.0, 0.96)
+				border = Color(0.08, 0.44, 0.72)
+				lip = Color(0.16, 0.68, 0.92)
+				bar_col = Color(0.18, 0.78, 1.0)
+				txt_col = Color(0.06, 0.32, 0.54)
+			Style.WHIRLWIND:
+				bg = Color(0.92, 1.0, 0.92, 0.96)
+				border = Color(0.14, 0.52, 0.24)
+				lip = Color(0.24, 0.76, 0.38)
+				bar_col = Color(0.28, 0.86, 0.42)
+				txt_col = Color(0.10, 0.40, 0.16)
 
 		# Shadow + lip + capsule body
 		_draw_capsule(Rect2(2.0, 4.0, w - 4.0, h), r, Color(0.08, 0.16, 0.04, 0.24))
@@ -839,14 +992,14 @@ class BuffPillWidget extends Control:
 		var bar_r := Rect2(16.0, h - 9.0, w - 32.0, 5.5)
 		_draw_capsule(bar_r, 2.75, Color(0.86, 0.82, 0.70, 0.7))
 		var fw := maxf(6.0, bar_r.size.x * _ratio)
-		if _style == Style.FEVER:
-			_draw_capsule(Rect2(bar_r.position.x, bar_r.position.y, fw, bar_r.size.y), 2.75, Color(1.0, 0.62, 0.12))
-		else:
+		if _style == Style.RAINBOW_BOOST:
 			# Mini rainbow segmented progress bar!
 			var seg_w := fw / float(RAINBOW.size())
 			for i in range(RAINBOW.size()):
 				var sx := bar_r.position.x + float(i) * seg_w
 				draw_rect(Rect2(sx, bar_r.position.y, seg_w + 0.5, bar_r.size.y), RAINBOW[i])
+		else:
+			_draw_capsule(Rect2(bar_r.position.x, bar_r.position.y, fw, bar_r.size.y), 2.75, bar_col)
 
 		# Crisp icon on left
 		var ic := Vector2(20.0, h * 0.44)
@@ -863,8 +1016,7 @@ class BuffPillWidget extends Control:
 			])
 			draw_colored_polygon(bolt, Color(1.0, 0.56, 0.08))
 
-		# Text (ultra concise: "2× 3.3s" or "3.4s")
-		var txt_col := Color(0.46, 0.18, 0.04) if _style == Style.FEVER else Color(0.14, 0.34, 0.48)
+		# Text (ultra concise: "2× 3.3s" / "护盾 4.2s" / "旋风 3.8s")
 		draw_string(font, Vector2(34.0, 22.0), _text, HORIZONTAL_ALIGNMENT_CENTER, w - 46.0, 18, txt_col)
 		_draw_capsule_outline(Rect2(0.0, 0.0, w, h), r, border, 2.4)
 
@@ -982,6 +1134,7 @@ class GameOverCardWidget extends Control:
 	var tex_grass: Texture2D = null
 	var tex_flower: Texture2D = null
 	var tex_crown: Texture2D = null
+	var tex_coin: Texture2D = null
 
 	var _score: int = 0
 	var _area_ratio: float = 0.0
@@ -990,6 +1143,8 @@ class GameOverCardWidget extends Control:
 	var _flowers: int = 0
 	var _best_score: int = 0
 	var _is_new_record: bool = false
+	var _yards_cleared: int = 0
+	var _earned_coins: int = 0
 	var _stars: int = 2
 
 	var _anim_elapsed: float = 0.0
@@ -997,7 +1152,11 @@ class GameOverCardWidget extends Control:
 	var _star_ring_t: Array[float] = [-1.0, -1.0, -1.0]
 	var _sparkles: Array[Dictionary] = []
 
-	func set_results(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool) -> void:
+	func set_earned_coins(val: int) -> void:
+		_earned_coins = val
+		queue_redraw()
+
+	func set_results(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool, yards_cleared: int = 0, earned_coins: int = 0) -> void:
 		_score = score
 		_area_ratio = area_ratio
 		_sq_m = sq_m
@@ -1005,15 +1164,17 @@ class GameOverCardWidget extends Control:
 		_flowers = flowers_count
 		_best_score = best_score
 		_is_new_record = is_new_record
+		_yards_cleared = yards_cleared
+		_earned_coins = earned_coins
 		_anim_elapsed = 0.0
 		_star_impacted = [false, false, false]
 		_star_ring_t = [-1.0, -1.0, -1.0]
 		_sparkles.clear()
 
 		var pct := area_ratio * 100.0
-		if pct >= 62.0 or score >= 6200:
+		if _yards_cleared >= 2 or score >= 5200:
 			_stars = 3
-		elif pct >= 35.0 or score >= 3000:
+		elif _yards_cleared >= 1 or pct >= 70.0 or score >= 2600:
 			_stars = 2
 		else:
 			_stars = 1
@@ -1212,10 +1373,11 @@ class GameOverCardWidget extends Control:
 		var tile_h := tile_w * 1.06
 		var tile_y := h * 0.645
 
+		var left_val := "清%d关" % _yards_cleared if _yards_cleared > 0 else ("%.0f%%" % (_area_ratio * 100.0))
 		var tiles := [
-			{"tex": tex_grass, "val": "%.0f%%" % (_area_ratio * 100.0), "col": Color(0.20, 0.56, 0.12)},
+			{"tex": tex_grass, "val": left_val, "col": Color(0.20, 0.56, 0.12)},
 			{"tex": tex_flower, "val": "×%d" % _flowers, "col": Color(0.88, 0.22, 0.50)},
-			{"tex": tex_crown, "val": "%d" % _best_score, "col": Color(0.76, 0.38, 0.04)},
+			{"tex": tex_coin if tex_coin != null else tex_crown, "val": "+%d" % _earned_coins, "col": Color(0.76, 0.38, 0.04)},
 		]
 
 		for i in range(3):
@@ -1364,18 +1526,20 @@ class RoundBackButton extends Button:
 # CARTOON MINIMAP (Warm wooden frame matching game aesthetic!)
 # ==============================================================================
 class MinimapWidget extends Control:
+	var cute_font: Font = null
 	var _tex: Texture2D = null
-	var _field_size: Vector2 = Vector2(1024, 1536)
+	var _field_size: Vector2 = Vector2(608, 832)
 	var _mower_pos: Vector2 = Vector2.ZERO
 	var _mower_angle: float = 0.0
 	var _flowers: Array = []
 	var _boosts: Array = []
 	var _animals: Array = []
+	var _yard_level: int = 1
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
 
-	func set_data(tex: Texture2D, fsize: Vector2, mpos: Vector2, mang: float, flowers: Array, boosts: Array, animals: Array) -> void:
+	func set_data(tex: Texture2D, fsize: Vector2, mpos: Vector2, mang: float, flowers: Array, boosts: Array, animals: Array, yard_level: int = 1) -> void:
 		_tex = tex
 		_field_size = fsize
 		_mower_pos = mpos
@@ -1383,6 +1547,7 @@ class MinimapWidget extends Control:
 		_flowers = flowers
 		_boosts = boosts
 		_animals = animals
+		_yard_level = yard_level
 		queue_redraw()
 
 	func _draw() -> void:
@@ -1414,11 +1579,20 @@ class MinimapWidget extends Control:
 
 		var mp := Vector2(_mower_pos.x * sx, _mower_pos.y * sy)
 		draw_circle(mp, 4.6, Color(1.0, 0.22, 0.18))
-		draw_arc(mp, 4.8, 0.0, TAU, 16, Color.WHITE, 1.5, true)
+		draw_arc(mp, 4.8, 0.0, TAU, 16, Color.WHITE, 1.5, false)
 		var tip := mp + Vector2.from_angle(_mower_angle) * 6.5
-		draw_line(mp, tip, Color.WHITE, 1.8, true)
+		draw_line(mp, tip, Color.WHITE, 1.8, false)
 
 		draw_rect(rect, Color(0.36, 0.20, 0.05, 0.95), false, 2.0)
+
+		# Compact yard level tag tucked cleanly below the wooden frame
+		var badge_w := size.x + 4.0
+		var badge_h := 22.0
+		var br := Rect2(-2.0, size.y + 7.0, badge_w, badge_h)
+		draw_rect(br, Color(0.26, 0.15, 0.05, 0.92))
+		draw_rect(br, Color(0.96, 0.84, 0.54, 0.95), false, 1.8)
+		var font := cute_font if cute_font != null else ThemeDB.fallback_font
+		draw_string(font, Vector2(br.position.x, br.position.y + 16.5), "第%d关" % _yard_level, HORIZONTAL_ALIGNMENT_CENTER, br.size.x, 15, Color(1.0, 0.96, 0.80))
 
 
 # ==============================================================================
@@ -1822,3 +1996,82 @@ class ToastBanner extends Control:
 		draw_line(Vector2(lc.x, h), Vector2(rc.x, h), border, 2.5, false)
 		var font := cute_font if cute_font != null else ThemeDB.fallback_font
 		draw_string(font, Vector2(14.0, h * 0.5 + 7.5), _msg, HORIZONTAL_ALIGNMENT_CENTER, w - 28.0, 20, Color(1.0, 0.99, 0.92))
+
+
+# ==============================================================================
+# GLOSSY SKY-BLUE GARAGE UPGRADE ENTRY BUTTON (with optional pulsing red dot!)
+# ==============================================================================
+class GarageEntryButton extends Button:
+	var cute_font: Font = null
+	var font_size_override: int = 21
+	var show_red_dot: bool = false
+	var _press_anim: float = 0.0
+
+	func _ready() -> void:
+		focus_mode = Control.FOCUS_NONE
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		var empty := StyleBoxEmpty.new()
+		add_theme_stylebox_override("normal", empty)
+		add_theme_stylebox_override("hover", empty)
+		add_theme_stylebox_override("pressed", empty)
+		add_theme_stylebox_override("disabled", empty)
+		add_theme_stylebox_override("focus", empty)
+		add_theme_color_override("font_color", Color(0, 0, 0, 0))
+		add_theme_color_override("font_hover_color", Color(0, 0, 0, 0))
+		add_theme_color_override("font_pressed_color", Color(0, 0, 0, 0))
+
+	func _process(delta: float) -> void:
+		if not is_visible_in_tree():
+			return
+		var target := 1.0 if is_pressed() else 0.0
+		var next_val := lerpf(_press_anim, target, minf(delta * 18.0, 1.0))
+		if absf(next_val - _press_anim) > 0.002 or show_red_dot:
+			_press_anim = next_val
+			queue_redraw()
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		if w < 40.0 or h < 20.0:
+			return
+		var bw := w
+		var bh := h - 6.0
+		var y0 := 1.0 + _press_anim * 3.5
+		var r := bh * 0.5
+
+		_draw_capsule(Rect2(8.0, y0 + 7.5 - _press_anim * 2.5, bw - 16.0, bh - 2.0), r - 1.0, Color(0.05, 0.14, 0.26, 0.30))
+		_draw_capsule(Rect2(0.0, y0 + 4.8 - _press_anim * 3.0, bw, bh), r, Color(0.08, 0.36, 0.68))
+		_draw_capsule(Rect2(0.0, y0, bw, bh), r, Color(0.16, 0.58, 0.94))
+		_draw_capsule(Rect2(2.0, y0 + 1.5, bw - 4.0, bh * 0.78), r * 0.86, Color(0.28, 0.70, 0.98))
+		_draw_capsule(Rect2(4.0, y0 + 2.5, bw - 8.0, bh * 0.48), r * 0.62, Color(0.46, 0.82, 1.0))
+		_draw_capsule_outline(Rect2(0.0, y0, bw, bh), r, Color(0.06, 0.28, 0.56, 0.90), 2.4)
+
+		var font := cute_font if cute_font != null else ThemeDB.fallback_font
+		var fsz := int(clampf(float(font_size_override), 16.0, bh * 0.44))
+		var ty := y0 + bh * 0.5 + float(fsz) * 0.35
+		draw_string(font, Vector2(0.0, ty + 2.0), text, HORIZONTAL_ALIGNMENT_CENTER, bw, fsz, Color(0.05, 0.22, 0.46, 0.85))
+		draw_string(font, Vector2(0.0, ty), text, HORIZONTAL_ALIGNMENT_CENTER, bw, fsz, Color(1.0, 0.99, 0.94))
+
+		if show_red_dot:
+			var pulse := 1.0 + 0.14 * sin(Time.get_ticks_msec() * 0.008)
+			var dp := Vector2(bw - 10.0, y0 + 6.0)
+			draw_circle(dp, 9.5 * pulse, Color(1.0, 0.98, 0.92))
+			draw_circle(dp, 7.2 * pulse, Color(0.98, 0.22, 0.18))
+
+	func _draw_capsule(rect: Rect2, radius: float, col: Color) -> void:
+		var r := minf(radius, minf(rect.size.x * 0.5, rect.size.y * 0.5))
+		var lc := Vector2(rect.position.x + r, rect.position.y + rect.size.y * 0.5)
+		var rc := Vector2(rect.end.x - r, rect.position.y + rect.size.y * 0.5)
+		draw_circle(lc, r, col)
+		draw_circle(rc, r, col)
+		if rc.x > lc.x:
+			draw_rect(Rect2(lc.x, rect.position.y, rc.x - lc.x, rect.size.y), col)
+
+	func _draw_capsule_outline(rect: Rect2, radius: float, col: Color, width: float) -> void:
+		var r := minf(radius, minf(rect.size.x * 0.5, rect.size.y * 0.5))
+		var lc := Vector2(rect.position.x + r, rect.position.y + rect.size.y * 0.5)
+		var rc := Vector2(rect.end.x - r, rect.position.y + rect.size.y * 0.5)
+		draw_arc(lc, r, PI * 0.5, PI * 1.5, 16, col, width, false)
+		draw_arc(rc, r, -PI * 0.5, PI * 0.5, 16, col, width, false)
+		draw_line(Vector2(lc.x, rect.position.y), Vector2(rc.x, rect.position.y), col, width, false)
+		draw_line(Vector2(lc.x, rect.end.y), Vector2(rc.x, rect.end.y), col, width, false)

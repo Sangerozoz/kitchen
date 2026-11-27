@@ -21,6 +21,9 @@ var _mud_timer: float = 2.4
 var _alert_timer: float = 0.0
 var _body_radius: float = 19.0
 var _redraw_accum: float = 0.0
+var _knock_vel: Vector2 = Vector2.ZERO
+var _knock_spin: float = 0.0
+var _sprite_tex: Texture2D = null
 
 func setup(a_type: AnimalType, pos: Vector2, play_bounds: Rect2, mower: Node2D) -> void:
 	animal_type = a_type
@@ -51,6 +54,23 @@ func _ready() -> void:
 	col.shape = shape
 	add_child(col)
 
+	match animal_type:
+		AnimalType.SHEEP:
+			_sprite_tex = load("res://assets/sprites/animal_sheep.png")
+		AnimalType.DOG:
+			_sprite_tex = load("res://assets/sprites/animal_dog.png")
+		AnimalType.PIG:
+			_sprite_tex = load("res://assets/sprites/animal_pig.png")
+
+func knock_flying(dir: Vector2) -> void:
+	_hit_cooldown = 3.0
+	_state = "flee"
+	_state_timer = 2.4
+	var d := dir.normalized() if dir.length() > 0.05 else Vector2.from_angle(randf() * TAU)
+	_move_dir = d
+	_knock_vel = d * 460.0
+	_knock_spin = 16.0
+
 func _physics_process(delta: float) -> void:
 	_hit_cooldown = maxf(0.0, _hit_cooldown - delta)
 	_alert_timer = maxf(0.0, _alert_timer - delta)
@@ -63,6 +83,27 @@ func _physics_process(delta: float) -> void:
 		dist_to_mower = to_mower.length()
 
 	var speed := 0.0
+	if _knock_vel.length() > 15.0:
+		velocity = _knock_vel
+		_knock_vel = _knock_vel.lerp(Vector2.ZERO, minf(delta * 4.5, 1.0))
+		_facing += _knock_spin * delta
+		_knock_spin = lerpf(_knock_spin, 0.0, minf(delta * 3.5, 1.0))
+		move_and_slide()
+		if position.x < bounds.position.x:
+			position.x = bounds.position.x
+			_knock_vel.x = absf(_knock_vel.x) * 0.5
+		elif position.x > bounds.end.x:
+			position.x = bounds.end.x
+			_knock_vel.x = -absf(_knock_vel.x) * 0.5
+		if position.y < bounds.position.y:
+			position.y = bounds.position.y
+			_knock_vel.y = absf(_knock_vel.y) * 0.5
+		elif position.y > bounds.end.y:
+			position.y = bounds.end.y
+			_knock_vel.y = -absf(_knock_vel.y) * 0.5
+		queue_redraw()
+		return
+
 	if preview_mode:
 		speed = _update_peaceful_wander(dist_to_mower, to_mower)
 	else:
@@ -213,9 +254,23 @@ func get_minimap_color() -> Color:
 	return Color.WHITE
 
 func _draw() -> void:
-	var hop := absf(sin(_walk_cycle)) * 3.2 if velocity.length() > 8.0 else 0.0
-	# Shadow
-	draw_circle(Vector2(2.0, 6.0), _body_radius * 0.92, Color(0.05, 0.12, 0.05, 0.30))
+	var hop := absf(sin(_walk_cycle)) * 3.8 if velocity.length() > 8.0 else 0.0
+	var squash := 1.0 + 0.07 * sin(_walk_cycle * 2.0) if velocity.length() > 8.0 else 1.0
+	# Soft shadow
+	draw_circle(Vector2(2.5, 6.5), _body_radius * 1.02, Color(0.05, 0.12, 0.05, 0.30))
+
+	if _sprite_tex != null:
+		var sz := _body_radius * 2.75
+		draw_set_transform(Vector2(0.0, -hop), _facing + PI * 0.5, Vector2(1.0 / squash, squash))
+		draw_texture_rect(_sprite_tex, Rect2(-sz * 0.5, -sz * 0.5, sz, sz), false, Color.WHITE)
+		draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+		if _alert_timer > 0.0:
+			var bx := Vector2(0.0, -_body_radius - 16.0)
+			draw_circle(bx, 9.5, Color(1.0, 0.24, 0.20))
+			draw_arc(bx, 9.5, 0.0, TAU, 14, Color.WHITE, 1.8, false)
+			draw_rect(Rect2(bx.x - 1.8, bx.y - 5.5, 3.6, 6.5), Color.WHITE)
+			draw_circle(bx + Vector2(0.0, 4.2), 2.0, Color.WHITE)
+		return
 
 	draw_set_transform(Vector2(0.0, -hop), _facing, Vector2.ONE)
 	match animal_type:

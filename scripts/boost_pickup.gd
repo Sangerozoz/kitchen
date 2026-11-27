@@ -22,6 +22,7 @@ var lifetime_paused: bool = false
 var _phase: float = 0.0
 var _pop_scale: float = 0.0
 var _redraw_accum: float = 0.0
+var _orb_tex: Texture2D = null
 
 func setup(pos: Vector2, dur: float = 18.0) -> void:
 	position = pos
@@ -30,6 +31,7 @@ func setup(pos: Vector2, dur: float = 18.0) -> void:
 
 func _ready() -> void:
 	z_index = 9
+	_orb_tex = load("res://assets/sprites/pickup_boost.png")
 
 func _process(delta: float) -> void:
 	if is_collected:
@@ -67,7 +69,18 @@ func _draw() -> void:
 	var pulse := 1.0 + 0.07 * sin(t * 6.0)
 
 	# Ground shadow
-	draw_circle(Vector2(0.0, 12.0) * pop, 18.0 * pop, Color(0.06, 0.16, 0.04, 0.30))
+	draw_circle(Vector2(0.0, 14.0) * pop, 20.0 * pop, Color(0.06, 0.16, 0.04, 0.30))
+
+	if _orb_tex != null:
+		var halo_r := (30.0 + 3.5 * sin(t * 5.0)) * pop
+		draw_circle(bob, halo_r, Color(1.0, 0.96, 0.72, 0.16))
+		var sz := 54.0 * pop * pulse
+		draw_texture_rect(_orb_tex, Rect2(bob.x - sz * 0.5, bob.y - sz * 0.5, sz, sz), false, Color.WHITE)
+		for i in range(4):
+			var ang := t * 3.0 + float(i) * (TAU / 4.0)
+			var sp := bob + Vector2(cos(ang), sin(ang)) * 27.0 * pop
+			draw_circle(sp, 3.0 * pop, RAINBOW_COLS[(i * 2) % RAINBOW_COLS.size()])
+		return
 
 	# Spinning segmented rainbow aura ring!
 	var halo_r := (27.0 + 3.5 * sin(t * 5.0)) * pop

@@ -1,8 +1,9 @@
 shader_type canvas_item;
 
-uniform vec2 grid_size = vec2(64.0, 96.0);
-uniform vec2 field_size = vec2(1024.0, 1536.0);
+uniform vec2 grid_size = vec2(38.0, 52.0);
+uniform vec2 field_size = vec2(608.0, 832.0);
 uniform float fever_strength : hint_range(0.0, 1.0) = 0.0;
+uniform int yard_theme = 0;
 
 // 100% 16-bit mediump-safe fast hash for iOS & Android mobile WebGL2 GPUs
 float hash21(vec2 p) {
@@ -31,11 +32,40 @@ void fragment() {
 	vec2 px_step = 1.0 / grid_size;
 	vec3 col;
 
+	// Per-yard sunlit meadow color palette (0: Sunny Emerald, 1: Golden Autumn, 2: Spring Mint, 3: Deep Jade)
+	vec3 mowed_a = vec3(0.49, 0.77, 0.30);
+	vec3 mowed_b = vec3(0.43, 0.72, 0.26);
+	vec3 tall_dark = vec3(0.14, 0.43, 0.16);
+	vec3 tall_mid = vec3(0.20, 0.54, 0.20);
+	vec3 tall_tip = vec3(0.32, 0.67, 0.25);
+	if (yard_theme == 1) {
+		// Golden Autumn Meadow
+		mowed_a = vec3(0.76, 0.74, 0.30);
+		mowed_b = vec3(0.69, 0.67, 0.25);
+		tall_dark = vec3(0.44, 0.45, 0.12);
+		tall_mid = vec3(0.58, 0.56, 0.16);
+		tall_tip = vec3(0.76, 0.68, 0.22);
+	} else if (yard_theme == 2) {
+		// Spring Fresh Mint Meadow
+		mowed_a = vec3(0.42, 0.80, 0.44);
+		mowed_b = vec3(0.36, 0.74, 0.39);
+		tall_dark = vec3(0.11, 0.46, 0.28);
+		tall_mid = vec3(0.16, 0.58, 0.36);
+		tall_tip = vec3(0.30, 0.74, 0.46);
+	} else if (yard_theme == 3) {
+		// Deep Sunlit Jade Grove
+		mowed_a = vec3(0.45, 0.73, 0.28);
+		mowed_b = vec3(0.39, 0.66, 0.23);
+		tall_dark = vec3(0.10, 0.36, 0.14);
+		tall_mid = vec3(0.16, 0.47, 0.18);
+		tall_tip = vec3(0.28, 0.62, 0.24);
+	}
+
 	// Fast-path branching: Android/iOS mobile GPUs skip unused noise & texture taps!
 	if (mowed > 0.98) {
 		// Already mowed lawn: classic alternating stripes + cheap 1-hash grain + edge drop-shadow
 		float stripe = step(0.5, fract(world_px.x * 0.015625));
-		vec3 mowed_col = mix(vec3(0.49, 0.77, 0.30), vec3(0.43, 0.72, 0.26), stripe);
+		vec3 mowed_col = mix(mowed_a, mowed_b, stripe);
 		float grain = hash21(floor(mod(world_px, 256.0) * 0.5));
 		mowed_col += (grain - 0.5) * 0.036;
 
@@ -52,8 +82,8 @@ void fragment() {
 		float clump = 0.5 + 0.5 * sin(world_px.x * 0.048 + world_px.y * 0.036);
 		float tip = smoothstep(0.56, 0.90, blades);
 
-		vec3 tall_col = mix(vec3(0.14, 0.43, 0.16), vec3(0.20, 0.54, 0.20), clump);
-		tall_col = mix(tall_col, vec3(0.32, 0.67, 0.25), tip * 0.75);
+		vec3 tall_col = mix(tall_dark, tall_mid, clump);
+		tall_col = mix(tall_col, tall_tip, tip * 0.75);
 
 		// Special colored grass (golden / flower-turf patches)
 		float special = state.g;
@@ -76,7 +106,7 @@ void fragment() {
 
 		if (mowed > 0.02) {
 			float stripe = step(0.5, fract(world_px.x * 0.015625));
-			vec3 mowed_col = mix(vec3(0.49, 0.77, 0.30), vec3(0.43, 0.72, 0.26), stripe);
+			vec3 mowed_col = mix(mowed_a, mowed_b, stripe);
 			col = mix(tall_col, mowed_col, mowed);
 		} else {
 			col = tall_col;
