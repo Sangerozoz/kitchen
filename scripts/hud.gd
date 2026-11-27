@@ -2,6 +2,8 @@ extends CanvasLayer
 class_name GameHUD
 
 signal start_requested()
+signal start_ad_requested()
+signal revive_ad_requested()
 signal restart_requested()
 signal home_requested()
 signal mute_toggled()
@@ -25,6 +27,7 @@ var _sound_btn: SoundToggleButton
 var _title_overlay: Control
 var _title_logo: TextureRect
 var _title_start_btn: GlossyStartButton
+var _title_ad_btn: RewardAdButton
 var _title_best_badge: CrownScoreBadge
 var _title_fade_tween: Tween
 
@@ -37,8 +40,10 @@ var _safe_right: float = 0.0
 
 var _gameover_overlay: Control
 var _go_card: GameOverCardWidget
+var _go_revive_btn: RewardAdButton
 var _go_retry_btn: GlossyStartButton
 var _go_home_btn: RoundBackButton
+var _toast_banner: ToastBanner
 
 var _tex_grass: Texture2D
 var _tex_flower: Texture2D
@@ -161,16 +166,27 @@ func _build_ui() -> void:
 	_build_title_overlay(root)
 	_build_gameover_overlay(root)
 
-	# Topmost safe layer so top-right Sound/BGM toggle stays accessible across Title, Playing, and GameOver
+	# Topmost safe layer so top-right Sound/BGM toggle & toast stay accessible across Title, Playing, and GameOver
 	var top_controls_safe := _make_safe_container(root)
 	_sound_btn = SoundToggleButton.new()
 	_sound_btn.set_anchors_preset(Control.PRESET_TOP_RIGHT)
-	_sound_btn.offset_left = -64.0
+	_sound_btn.offset_left = -78.0
 	_sound_btn.offset_right = -14.0
-	_sound_btn.offset_top = 10.0
-	_sound_btn.offset_bottom = 60.0
+	_sound_btn.offset_top = 8.0
+	_sound_btn.offset_bottom = 72.0
 	_sound_btn.pressed.connect(func() -> void: mute_toggled.emit())
 	top_controls_safe.add_child(_sound_btn)
+
+	_toast_banner = ToastBanner.new()
+	_toast_banner.cute_font = _cute_font
+	_toast_banner.anchor_left = 0.08
+	_toast_banner.anchor_right = 0.92
+	_toast_banner.anchor_top = 0.64
+	_toast_banner.anchor_bottom = 0.64
+	_toast_banner.offset_top = -24.0
+	_toast_banner.offset_bottom = 24.0
+	_toast_banner.visible = false
+	top_controls_safe.add_child(_toast_banner)
 
 	set_playing_ui_visible(false)
 
@@ -222,14 +238,15 @@ func _compute_safe_insets() -> Dictionary:
 			rep_left = maxf(0.0, float(safe_rect.position.x) * sx)
 			rep_right = maxf(0.0, (win_size.x - float(safe_rect.end.x)) * sx)
 
-	# Guarantee comfortable safe clearance even when mobile WebViews report 0px for env(safe-area-inset-*)
-	var min_top := 76.0 if is_tall_phone else (42.0 if is_touch_mobile else 16.0)
-	var min_bottom := 46.0 if is_tall_phone else (32.0 if is_touch_mobile else 22.0)
-	var final_top := maxf(rep_top + (8.0 if rep_top > 0.0 else 0.0), min_top)
+	# Reserve clearance below BOTH notch/Dynamic Island AND TapTap mini-app top-right capsule (··· | ◯)
+	var min_top := 128.0 if is_tall_phone else (104.0 if is_touch_mobile else 16.0)
+	var min_bottom := 48.0 if is_tall_phone else (34.0 if is_touch_mobile else 22.0)
+	var capsule_pad := 62.0 if (is_tall_phone or is_touch_mobile) else 8.0
+	var final_top := maxf(rep_top + (capsule_pad if rep_top > 0.0 else 0.0), min_top)
 	var final_bottom := maxf(rep_bottom + (8.0 if rep_bottom > 0.0 else 0.0), min_bottom)
 
 	return {
-		"top": clampf(final_top, 16.0, vp_size.y * 0.16),
+		"top": clampf(final_top, 16.0, vp_size.y * 0.19),
 		"bottom": clampf(final_bottom, 20.0, vp_size.y * 0.12),
 		"left": clampf(rep_left, 0.0, vp_size.x * 0.08),
 		"right": clampf(rep_right, 0.0, vp_size.x * 0.08),
@@ -261,13 +278,13 @@ func _update_sound_btn_pos(in_gameplay: bool) -> void:
 	if _sound_btn == null:
 		return
 	if in_gameplay:
-		# Top-right directly below score pill, symmetrically opposite the top-left minimap
+		# Larger 64x64 button cleanly below score pill, symmetrically opposite top-left minimap
 		_sound_btn.offset_top = 78.0
-		_sound_btn.offset_bottom = 128.0
+		_sound_btn.offset_bottom = 142.0
 	else:
-		# Clean top-right corner of safe area on Title and GameOver screens
-		_sound_btn.offset_top = 10.0
-		_sound_btn.offset_bottom = 60.0
+		# Clean top-right corner of safe area (below mini-app capsule) on Title & GameOver screens
+		_sound_btn.offset_top = 8.0
+		_sound_btn.offset_bottom = 72.0
 
 func _process(_delta: float) -> void:
 	var vp := get_viewport()
@@ -325,8 +342,8 @@ func _build_title_overlay(root: Control) -> void:
 	_title_best_badge.tex_crown = _tex_crown
 	_title_best_badge.anchor_left = 0.27
 	_title_best_badge.anchor_right = 0.73
-	_title_best_badge.anchor_top = 0.695
-	_title_best_badge.anchor_bottom = 0.755
+	_title_best_badge.anchor_top = 0.688
+	_title_best_badge.anchor_bottom = 0.748
 	_title_best_badge.offset_left = 0.0
 	_title_best_badge.offset_right = 0.0
 	_title_best_badge.offset_top = 0.0
@@ -334,21 +351,37 @@ func _build_title_overlay(root: Control) -> void:
 	_title_best_badge.visible = false
 	title_safe.add_child(_title_best_badge)
 
-	# Glossy Start Button ("开始割草") with safe bottom clearance
+	# Glossy Start Button ("开始割草") matching loading bar slot
 	_title_start_btn = GlossyStartButton.new()
 	_title_start_btn.text = "开始割草"
 	_title_start_btn.art_texture = load("res://assets/ui/start_btn_text.png")
 	_title_start_btn.cute_font = _cute_font
 	_title_start_btn.anchor_left = 0.11
 	_title_start_btn.anchor_right = 0.89
-	_title_start_btn.anchor_top = 0.775
-	_title_start_btn.anchor_bottom = 0.875
+	_title_start_btn.anchor_top = 0.770
+	_title_start_btn.anchor_bottom = 0.865
 	_title_start_btn.offset_left = 0.0
 	_title_start_btn.offset_right = 0.0
 	_title_start_btn.offset_top = 0.0
 	_title_start_btn.offset_bottom = 0.0
 	_title_start_btn.pressed.connect(func() -> void: start_requested.emit())
 	title_safe.add_child(_title_start_btn)
+
+	# Optional Rewarded Video Start Buff Button (clearly separated below Start button)
+	_title_ad_btn = RewardAdButton.new()
+	_title_ad_btn.text = "看视频 · 开局冲刺+2×"
+	_title_ad_btn.cute_font = _cute_font
+	_title_ad_btn.font_size_override = 22
+	_title_ad_btn.anchor_left = 0.14
+	_title_ad_btn.anchor_right = 0.86
+	_title_ad_btn.anchor_top = 0.890
+	_title_ad_btn.anchor_bottom = 0.962
+	_title_ad_btn.offset_left = 0.0
+	_title_ad_btn.offset_right = 0.0
+	_title_ad_btn.offset_top = 0.0
+	_title_ad_btn.offset_bottom = 0.0
+	_title_ad_btn.pressed.connect(func() -> void: start_ad_requested.emit())
+	title_safe.add_child(_title_ad_btn)
 
 func _build_gameover_overlay(root: Control) -> void:
 	_gameover_overlay = ColorRect.new()
@@ -371,20 +404,36 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_card.star_landed.connect(func(idx: int) -> void: star_landed.emit(idx))
 	_go_card.anchor_left = 0.08
 	_go_card.anchor_right = 0.92
-	_go_card.anchor_top = 0.11
-	_go_card.anchor_bottom = 0.73
+	_go_card.anchor_top = 0.075
+	_go_card.anchor_bottom = 0.685
 	_go_card.offset_left = 0.0
 	_go_card.offset_right = 0.0
 	_go_card.offset_top = 0.0
 	_go_card.offset_bottom = 0.0
 	go_safe.add_child(_go_card)
 
+	# Rewarded Video Continue Button (+20s + Rainbow Boost, max 1x per round)
+	_go_revive_btn = RewardAdButton.new()
+	_go_revive_btn.text = "看视频 · 续时+20秒"
+	_go_revive_btn.cute_font = _cute_font
+	_go_revive_btn.font_size_override = 26
+	_go_revive_btn.anchor_left = 0.11
+	_go_revive_btn.anchor_right = 0.89
+	_go_revive_btn.anchor_top = 0.716
+	_go_revive_btn.anchor_bottom = 0.806
+	_go_revive_btn.offset_left = 0.0
+	_go_revive_btn.offset_right = 0.0
+	_go_revive_btn.offset_top = 0.0
+	_go_revive_btn.offset_bottom = 0.0
+	_go_revive_btn.pressed.connect(func() -> void: revive_ad_requested.emit())
+	go_safe.add_child(_go_revive_btn)
+
 	# Clean Floating Action Row right below the card (safe bottom margin!)
 	_go_home_btn = RoundBackButton.new()
 	_go_home_btn.anchor_left = 0.11
 	_go_home_btn.anchor_right = 0.27
-	_go_home_btn.anchor_top = 0.768
-	_go_home_btn.anchor_bottom = 0.862
+	_go_home_btn.anchor_top = 0.834
+	_go_home_btn.anchor_bottom = 0.926
 	_go_home_btn.offset_left = 0.0
 	_go_home_btn.offset_right = 0.0
 	_go_home_btn.offset_top = 0.0
@@ -398,8 +447,8 @@ func _build_gameover_overlay(root: Control) -> void:
 	_go_retry_btn.font_size_override = 34
 	_go_retry_btn.anchor_left = 0.30
 	_go_retry_btn.anchor_right = 0.89
-	_go_retry_btn.anchor_top = 0.766
-	_go_retry_btn.anchor_bottom = 0.864
+	_go_retry_btn.anchor_top = 0.832
+	_go_retry_btn.anchor_bottom = 0.928
 	_go_retry_btn.offset_left = 0.0
 	_go_retry_btn.offset_right = 0.0
 	_go_retry_btn.offset_top = 0.0
@@ -454,11 +503,34 @@ func show_playing(from_home_drag: bool = false) -> void:
 		joystick.has_moved_once = false
 	joystick.enabled = true
 
-func show_gameover(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool) -> void:
+func show_gameover(score: int, area_ratio: float, sq_m: float, special_cells: int, flowers_count: int, best_score: int, is_new_record: bool, can_revive: bool = true) -> void:
 	set_playing_ui_visible(false)
 	_title_overlay.visible = false
 	_gameover_overlay.visible = true
 	_go_card.set_results(score, area_ratio, sq_m, special_cells, flowers_count, best_score, is_new_record)
+	if _go_revive_btn != null:
+		_go_revive_btn.visible = can_revive
+		_go_revive_btn.set_loading(false)
+		if can_revive:
+			_go_home_btn.anchor_top = 0.834
+			_go_home_btn.anchor_bottom = 0.926
+			_go_retry_btn.anchor_top = 0.832
+			_go_retry_btn.anchor_bottom = 0.928
+		else:
+			_go_home_btn.anchor_top = 0.746
+			_go_home_btn.anchor_bottom = 0.840
+			_go_retry_btn.anchor_top = 0.744
+			_go_retry_btn.anchor_bottom = 0.842
+
+func set_ad_buttons_loading(loading: bool) -> void:
+	if _title_ad_btn != null:
+		_title_ad_btn.set_loading(loading)
+	if _go_revive_btn != null:
+		_go_revive_btn.set_loading(loading)
+
+func show_toast(msg: String, is_positive: bool = false) -> void:
+	if _toast_banner != null:
+		_toast_banner.show_message(msg, is_positive)
 
 func update_hud(
 	time_left: float,
@@ -541,6 +613,10 @@ class TopHudWidget extends Control:
 	var _fever: bool = false
 	var _score_pop: float = 0.0
 	var _last_score: int = 0
+	var _last_drawn_secs: int = -1
+	var _last_drawn_area_milli: int = -1
+	var _last_drawn_score: int = -1
+	var _last_drawn_fever: bool = false
 
 	func _ready() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -553,7 +629,14 @@ class TopHudWidget extends Control:
 		_time_left = maxf(time_left, 0.0)
 		_score = score
 		_fever = fever_active
-		queue_redraw()
+		var secs := int(ceil(_time_left))
+		var area_milli := int(round(_area * 1000.0))
+		if secs != _last_drawn_secs or area_milli != _last_drawn_area_milli or _score != _last_drawn_score or _fever != _last_drawn_fever:
+			_last_drawn_secs = secs
+			_last_drawn_area_milli = area_milli
+			_last_drawn_score = _score
+			_last_drawn_fever = _fever
+			queue_redraw()
 
 	func _process(delta: float) -> void:
 		if not is_visible_in_tree():
@@ -1548,27 +1631,194 @@ class SoundToggleButton extends Button:
 		var r := minf(size.x, size.y) * 0.5 - 2.0
 		if r < 6.0:
 			return
+		var s := r / 23.0
 		var c := size * 0.5 + Vector2(0.0, _press_anim * 2.5)
-		# Cartoon cream-gold badge
-		draw_circle(c + Vector2(0.0, 3.5 - _press_anim * 2.0), r, Color(0.14, 0.28, 0.05, 0.32))
+		# Cartoon cream-gold badge (larger, clearer touch target!)
+		draw_circle(c + Vector2(0.0, 4.0 - _press_anim * 2.0), r, Color(0.14, 0.28, 0.05, 0.34))
 		draw_circle(c, r, Color(0.36, 0.20, 0.05))
-		draw_circle(c, r - 2.6, Color(1.0, 0.96, 0.84) if not is_muted else Color(0.88, 0.86, 0.80))
+		draw_circle(c, r - 3.0 * s, Color(1.0, 0.96, 0.84) if not is_muted else Color(0.88, 0.86, 0.80))
 		draw_circle(c + Vector2(-r * 0.30, -r * 0.32), r * 0.20, Color(1.0, 1.0, 0.96, 0.72))
 
 		var ink := Color(0.32, 0.17, 0.04) if not is_muted else Color(0.55, 0.45, 0.38)
-		# Speaker cone
+		# Bold scaled speaker cone
 		var cone := PackedVector2Array([
-			c + Vector2(-10.0, -4.5),
-			c + Vector2(-4.5, -4.5),
-			c + Vector2(2.5, -10.0),
-			c + Vector2(2.5, 10.0),
-			c + Vector2(-4.5, 4.5),
-			c + Vector2(-10.0, 4.5),
+			c + Vector2(-10.5, -4.8) * s,
+			c + Vector2(-4.6, -4.8) * s,
+			c + Vector2(2.6, -10.5) * s,
+			c + Vector2(2.6, 10.5) * s,
+			c + Vector2(-4.6, 4.8) * s,
+			c + Vector2(-10.5, 4.8) * s,
 		])
 		draw_colored_polygon(cone, ink)
 		if is_muted:
-			draw_line(c + Vector2(5.5, -5.5), c + Vector2(12.5, 5.5), Color(0.88, 0.24, 0.20), 2.8, true)
-			draw_line(c + Vector2(12.5, -5.5), c + Vector2(5.5, 5.5), Color(0.88, 0.24, 0.20), 2.8, true)
+			draw_line(c + Vector2(5.5, -5.8) * s, c + Vector2(13.0, 5.8) * s, Color(0.88, 0.24, 0.20), 3.2 * s, false)
+			draw_line(c + Vector2(13.0, -5.8) * s, c + Vector2(5.5, 5.8) * s, Color(0.88, 0.24, 0.20), 3.2 * s, false)
 		else:
-			draw_arc(c + Vector2(3.5, 0.0), 6.5, -0.72, 0.72, 10, Color(0.24, 0.66, 0.16), 2.6, true)
-			draw_arc(c + Vector2(3.5, 0.0), 10.5, -0.78, 0.78, 12, Color(0.24, 0.66, 0.16), 2.4, true)
+			draw_arc(c + Vector2(3.6, 0.0) * s, 6.8 * s, -0.72, 0.72, 10, Color(0.24, 0.66, 0.16), 2.8 * s, false)
+			draw_arc(c + Vector2(3.6, 0.0) * s, 11.2 * s, -0.78, 0.78, 12, Color(0.24, 0.66, 0.16), 2.6 * s, false)
+
+
+# ==============================================================================
+# GLOSSY REWARDED VIDEO AD BUTTON (Fresh Meadow-Emerald Pill + Video Play Badge)
+# ==============================================================================
+class RewardAdButton extends Button:
+	var cute_font: Font = null
+	var font_size_override: int = 24
+	var _press_anim: float = 0.0
+	var _is_loading: bool = false
+
+	func set_loading(loading: bool) -> void:
+		_is_loading = loading
+		disabled = loading
+		queue_redraw()
+
+	func _ready() -> void:
+		focus_mode = Control.FOCUS_NONE
+		mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		var empty := StyleBoxEmpty.new()
+		add_theme_stylebox_override("normal", empty)
+		add_theme_stylebox_override("hover", empty)
+		add_theme_stylebox_override("pressed", empty)
+		add_theme_stylebox_override("disabled", empty)
+		add_theme_stylebox_override("focus", empty)
+		add_theme_color_override("font_color", Color(0, 0, 0, 0))
+		add_theme_color_override("font_hover_color", Color(0, 0, 0, 0))
+		add_theme_color_override("font_pressed_color", Color(0, 0, 0, 0))
+		add_theme_color_override("font_disabled_color", Color(0, 0, 0, 0))
+
+	func _process(delta: float) -> void:
+		if not is_visible_in_tree():
+			return
+		var target := 1.0 if (is_pressed() and not disabled) else 0.0
+		var next_val := lerpf(_press_anim, target, minf(delta * 18.0, 1.0))
+		if absf(next_val - _press_anim) > 0.002:
+			_press_anim = next_val
+			queue_redraw()
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		if w < 40.0 or h < 20.0:
+			return
+
+		var bw := w
+		var bh := h - 6.0
+		var x0 := 0.0
+		var y0 := 1.0 + _press_anim * 3.5
+		var r := bh * 0.5
+
+		# Soft drop shadow + 3D deep emerald lip
+		_draw_capsule(Rect2(x0 + 8.0, y0 + 7.5 - _press_anim * 2.5, bw - 16.0, bh - 2.0), r - 1.0, Color(0.05, 0.20, 0.08, 0.30))
+		var lip_offset := 4.8 - _press_anim * 3.0
+		var lip_col := Color(0.07, 0.42, 0.20) if not _is_loading else Color(0.28, 0.38, 0.32)
+		var base_col := Color(0.11, 0.66, 0.32) if not _is_loading else Color(0.42, 0.56, 0.46)
+		var mid_col := Color(0.18, 0.78, 0.40) if not _is_loading else Color(0.48, 0.62, 0.52)
+		var top_col := Color(0.32, 0.88, 0.52) if not _is_loading else Color(0.56, 0.68, 0.60)
+		_draw_capsule(Rect2(x0, y0 + lip_offset, bw, bh), r, lip_col)
+		_draw_capsule(Rect2(x0, y0, bw, bh), r, base_col)
+		_draw_capsule(Rect2(x0 + 2.0, y0 + 1.5, bw - 4.0, bh * 0.80), r * 0.86, mid_col)
+		_draw_capsule(Rect2(x0 + 4.0, y0 + 2.5, bw - 8.0, bh * 0.52), r * 0.62, top_col)
+		_draw_capsule_outline(Rect2(x0, y0, bw, bh), r, Color(0.06, 0.36, 0.16, 0.85), 2.4)
+
+		# Glossy top highlight
+		_draw_capsule(Rect2(x0 + r * 0.55, y0 + 3.5, bw - r * 1.1, bh * 0.16), bh * 0.08, Color(0.92, 1.0, 0.94, 0.45))
+
+		# Clean circular glossy video-play badge on the left
+		var badge_rad := clampf(bh * 0.34, 14.0, 20.0)
+		var bc := Vector2(x0 + clampf(r * 0.78, 22.0, 32.0) + badge_rad * 0.35, y0 + bh * 0.5)
+		draw_circle(bc + Vector2(0.0, 1.8), badge_rad + 1.4, Color(0.06, 0.34, 0.14, 0.45))
+		draw_circle(bc, badge_rad, Color(1.0, 0.97, 0.84))
+		draw_arc(bc, badge_rad, 0.0, TAU, 24, Color(0.08, 0.44, 0.18, 0.70), 1.8, false)
+		# Crisp play triangle inside video badge
+		var ts := badge_rad * 0.48
+		var tc := bc + Vector2(1.4, 0.0)
+		var tri := PackedVector2Array([
+			tc + Vector2(-ts * 0.72, -ts),
+			tc + Vector2(-ts * 0.72, ts),
+			tc + Vector2(ts * 1.05, 0.0),
+		])
+		draw_colored_polygon(tri, Color(0.09, 0.56, 0.24))
+
+		# Crisp outlined label clearly stating reward rule
+		var font := cute_font if cute_font != null else ThemeDB.fallback_font
+		var label_txt := "广告加载中..." if _is_loading else text
+		var text_left := bc.x + badge_rad + 8.0
+		var text_w := bw - text_left - 16.0
+		var fsz := int(clampf(float(font_size_override), 16.0, bh * 0.44))
+		var ty := y0 + bh * 0.5 + float(fsz) * 0.35
+		draw_string(font, Vector2(text_left, ty + 2.0), label_txt, HORIZONTAL_ALIGNMENT_CENTER, text_w, fsz, Color(0.05, 0.28, 0.12, 0.85))
+		draw_string(font, Vector2(text_left, ty), label_txt, HORIZONTAL_ALIGNMENT_CENTER, text_w, fsz, Color(1.0, 0.99, 0.92))
+
+	func _draw_capsule(rect: Rect2, radius: float, col: Color) -> void:
+		var r := minf(radius, minf(rect.size.x * 0.5, rect.size.y * 0.5))
+		var lc := Vector2(rect.position.x + r, rect.position.y + rect.size.y * 0.5)
+		var rc := Vector2(rect.end.x - r, rect.position.y + rect.size.y * 0.5)
+		draw_circle(lc, r, col)
+		draw_circle(rc, r, col)
+		if rc.x > lc.x:
+			draw_rect(Rect2(lc.x, rect.position.y, rc.x - lc.x, rect.size.y), col)
+
+	func _draw_capsule_outline(rect: Rect2, radius: float, col: Color, width: float) -> void:
+		var r := minf(radius, minf(rect.size.x * 0.5, rect.size.y * 0.5))
+		var lc := Vector2(rect.position.x + r, rect.position.y + rect.size.y * 0.5)
+		var rc := Vector2(rect.end.x - r, rect.position.y + rect.size.y * 0.5)
+		draw_arc(lc, r, PI * 0.5, PI * 1.5, 16, col, width, false)
+		draw_arc(rc, r, -PI * 0.5, PI * 0.5, 16, col, width, false)
+		draw_line(Vector2(lc.x, rect.position.y), Vector2(rc.x, rect.position.y), col, width, false)
+		draw_line(Vector2(lc.x, rect.end.y), Vector2(rc.x, rect.end.y), col, width, false)
+
+
+# ==============================================================================
+# LIGHTWEIGHT NON-BLOCKING TOAST BANNER (Ad status & reward confirmation)
+# ==============================================================================
+class ToastBanner extends Control:
+	var cute_font: Font = null
+	var _msg: String = ""
+	var _is_positive: bool = false
+	var _timer: float = 0.0
+
+	func _ready() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func show_message(msg: String, is_positive: bool = false) -> void:
+		_msg = msg
+		_is_positive = is_positive
+		_timer = 2.4
+		modulate.a = 1.0
+		visible = true
+		queue_redraw()
+
+	func _process(delta: float) -> void:
+		if not visible:
+			return
+		_timer -= delta
+		if _timer <= 0.0:
+			visible = false
+			return
+		if _timer < 0.45:
+			modulate.a = clampf(_timer / 0.45, 0.0, 1.0)
+
+	func _draw() -> void:
+		var w := size.x
+		var h := size.y
+		if w < 40.0 or h < 20.0 or _msg == "":
+			return
+		var r := h * 0.5
+		var bg := Color(0.10, 0.52, 0.22, 0.94) if _is_positive else Color(0.24, 0.16, 0.07, 0.92)
+		var border := Color(0.94, 0.98, 0.72, 0.95) if _is_positive else Color(1.0, 0.84, 0.42, 0.92)
+		var lc := Vector2(r, h * 0.5)
+		var rc := Vector2(w - r, h * 0.5)
+		draw_circle(lc + Vector2(0.0, 3.0), r, Color(0.0, 0.0, 0.0, 0.24))
+		draw_circle(rc + Vector2(0.0, 3.0), r, Color(0.0, 0.0, 0.0, 0.24))
+		if rc.x > lc.x:
+			draw_rect(Rect2(lc.x, 3.0, rc.x - lc.x, h), Color(0.0, 0.0, 0.0, 0.24))
+		draw_circle(lc, r, bg)
+		draw_circle(rc, r, bg)
+		if rc.x > lc.x:
+			draw_rect(Rect2(lc.x, 0.0, rc.x - lc.x, h), bg)
+		draw_arc(lc, r, PI * 0.5, PI * 1.5, 14, border, 2.5, false)
+		draw_arc(rc, r, -PI * 0.5, PI * 0.5, 14, border, 2.5, false)
+		draw_line(Vector2(lc.x, 0.0), Vector2(rc.x, 0.0), border, 2.5, false)
+		draw_line(Vector2(lc.x, h), Vector2(rc.x, h), border, 2.5, false)
+		var font := cute_font if cute_font != null else ThemeDB.fallback_font
+		draw_string(font, Vector2(14.0, h * 0.5 + 7.5), _msg, HORIZONTAL_ALIGNMENT_CENTER, w - 28.0, 20, Color(1.0, 0.99, 0.92))

@@ -2,6 +2,8 @@ extends Node2D
 class_name GameManager
 
 const MATCH_DURATION := 60.0
+const REVIVE_BONUS_TIME := 20.0
+const REVIVE_BOOST_DURATION := 4.0
 const FEVER_DURATION := 6.5
 const BOOST_DURATION := 5.5
 const MAX_ACTIVE_FLOWERS := 4
@@ -27,11 +29,14 @@ var _boosts_spawned_total: int = 0
 var _shake_intensity: float = 0.0
 var _special_popup_accum: int = 0
 var _special_popup_timer: float = 0.0
+var _minimap_refresh_accum: float = 0.0
+var _has_revived_this_round: bool = false
 
 var _lawn: LawnField
 var _mower: Lawnmower
 var _camera: Camera2D
 var _sfx: SfxManager
+var _ad_manager: AdManager
 var _hud: GameHUD
 
 var _world_objects: Node2D
@@ -42,6 +47,14 @@ var _boost_pickups: Array[BoostPickup] = []
 var _mud_puddles: Array[MudPuddle] = []
 
 func _ready() -> void:
+	# Stop editor-only MCP autoload file polling in exported Web builds (avoids 60Hz VFS overhead on Android!)
+	if OS.has_feature("web"):
+		for mcp_name in ["MCPGameInspector", "MCPGameInput"]:
+			var mcp_node := get_node_or_null("/root/" + mcp_name)
+			if mcp_node != null:
+				mcp_node.set_process(false)
+				mcp_node.set_physics_process(false)
+				mcp_node.set_process_input(false)
 	randomize()
 	_load_high_score()
 	_build_scene_nodes()
@@ -51,6 +64,11 @@ func _ready() -> void:
 func _build_scene_nodes() -> void:
 	_sfx = SfxManager.new()
 	add_child(_sfx)
+
+	_ad_manager = AdManager.new()
+	_ad_manager.ad_started.connect(_on_ad_started)
+	_ad_manager.ad_finished.connect(_on_ad_finished)
+	add_child(_ad_manager)
 
 	_lawn = LawnField.new()
 	add_child(_lawn)
@@ -77,6 +95,8 @@ func _build_scene_nodes() -> void:
 
 	_hud = GameHUD.new()
 	_hud.start_requested.connect(_start_game)
+	_hud.start_ad_requested.connect(_on_start_ad_requested)
+	_hud.revive_ad_requested.connect(_on_revive_ad_requested)
 	_hud.restart_requested.connect(_start_game)
 	_hud.home_requested.connect(_return_to_title)
 	_hud.mute_toggled.connect(_on_mute_toggled)
@@ -132,6 +152,68 @@ func _start_game() -> void:
 	_sfx.start_bgm(true)
 	_sfx.start_engine()
 
+func _start_game_with_ad_buff() -> void:
+	_start_game()
+	fever_timer = FEVER_DURATION
+	_mower.activate_boost(BOOST_DURATION, BOOST_DURATION * 1.6)
+	_sfx.play_flower()
+	_update_hud_frame(true)
+	_spawn_floating_text("开局冲刺 2×!", _mower.global_position + Vector2(0, -38), Color(1.0, 0.94, 0.28), 28, 1.35)
+	_hud.show_toast("开局冲刺 + 双倍得分已激活！", true)
+
+func _continue_round_with_revive() -> void:
+	if state != GameState.GAME_OVER or _has_revived_this_round:
+		return
+	_has_revived_this_round = true
+	time_left = REVIVE_BONUS_TIME
+	_last_whole_sec = int(REVIVE_BONUS_TIME)
+	state = GameState.PLAYING
+	_mower.control_enabled = true
+	_mower.activate_boost(REVIVE_BOOST_DURATION, BOOST_DURATION * 1.6)
+	_hud.show_playing(true)
+	_sfx.start_bgm(true)
+	_sfx.start_engine()
+	_update_hud_frame(true)
+	_spawn_floating_text("+20秒 冲刺!", _mower.global_position + Vector2(0, -38), Color(1.0, 0.95, 0.30), 28, 1.35)
+	_hud.show_toast("续时成功！+20秒 冲刺开启！", true)
+
+func _on_start_ad_requested() -> void:
+	if state != GameState.TITLE or _ad_manager == null or _ad_manager.is_busy():
+		return
+	_ad_manager.show_rewarded_video("start_buff")
+
+func _on_revive_ad_requested() -> void:
+	if state != GameState.GAME_OVER or _has_revived_this_round:
+		return
+	if _lawn.get_mowed_ratio() >= 0.995:
+		return
+	if _ad_manager == null or _ad_manager.is_busy():
+		return
+	_ad_manager.show_rewarded_video("revive_20s")
+
+func _on_ad_started(_placement: String) -> void:
+	_sfx.set_ad_paused(true)
+	_hud.set_ad_buttons_loading(true)
+
+func _on_ad_finished(placement: String, rewarded: bool, status: String, _error_msg: String) -> void:
+	_sfx.set_ad_paused(false)
+	_hud.set_ad_buttons_loading(false)
+	if rewarded:
+		if placement == "start_buff":
+			_start_game_with_ad_buff()
+		elif placement == "revive_20s":
+			_continue_round_with_revive()
+		return
+	match status:
+		"cancelled":
+			_hud.show_toast("完整观看视频才能获得奖励哦", false)
+		"unsupported":
+			_hud.show_toast("请在 TapTap App 内观看视频领福利", false)
+		"missing_unit_id":
+			_hud.show_toast("广告位配置中，请稍后再试", false)
+		_:
+			_hud.show_toast("广告加载失败，请稍后再试", false)
+
 func _setup_round(clear_start_grass: bool) -> void:
 	# Clear dynamic entities from previous round
 	for child in _world_objects.get_children():
@@ -163,6 +245,7 @@ func _setup_round(clear_start_grass: bool) -> void:
 	_shake_intensity = 0.0
 	_special_popup_accum = 0
 	_special_popup_timer = 0.0
+	_has_revived_this_round = false
 
 	_generate_obstacles(rect, center)
 	_generate_animals(rect, center, not clear_start_grass)
@@ -397,7 +480,10 @@ func _process(delta: float) -> void:
 	# Update mower engine sound & HUD
 	var spd_ratio := _mower.velocity.length() / maxf(_mower.max_speed, 1.0)
 	_sfx.update_engine(spd_ratio, _mower.is_boosting, true)
-	_update_hud_frame()
+	_minimap_refresh_accum += delta
+	_update_hud_frame(_minimap_refresh_accum >= 0.10)
+	if _minimap_refresh_accum >= 0.10:
+		_minimap_refresh_accum = 0.0
 
 func _spawn_random_special_grass() -> void:
 	var avoid := _collect_obstacle_positions()
@@ -503,7 +589,7 @@ func _spawn_floating_text(msg: String, pos: Vector2, col: Color, sz: int = 20, d
 	ft.setup(msg, pos, col, sz, dur)
 	_world_objects.add_child(ft)
 
-func _update_hud_frame() -> void:
+func _update_hud_frame(refresh_minimap: bool = true) -> void:
 	_hud.update_hud(
 		time_left,
 		_lawn.get_mowed_ratio(),
@@ -514,15 +600,16 @@ func _update_hud_frame() -> void:
 		BOOST_DURATION,
 		_mower.get_status_label()
 	)
-	_hud.update_minimap(
-		_lawn.get_minimap_texture(),
-		_lawn.get_play_rect().size,
-		_mower.global_position,
-		_mower.facing_angle,
-		_flowers,
-		_boost_pickups,
-		_animals
-	)
+	if refresh_minimap:
+		_hud.update_minimap(
+			_lawn.get_minimap_texture(),
+			_lawn.get_play_rect().size,
+			_mower.global_position,
+			_mower.facing_angle,
+			_flowers,
+			_boost_pickups,
+			_animals
+		)
 
 func _end_game() -> void:
 	state = GameState.GAME_OVER
@@ -536,6 +623,7 @@ func _end_game() -> void:
 		best_score = score
 		_save_high_score()
 
+	var can_revive := (not _has_revived_this_round) and (_lawn.get_mowed_ratio() < 0.995)
 	_hud.show_gameover(
 		score,
 		_lawn.get_mowed_ratio(),
@@ -543,7 +631,8 @@ func _end_game() -> void:
 		special_cells_cut,
 		flowers_harvested,
 		best_score,
-		is_new_record
+		is_new_record,
+		can_revive
 	)
 
 func _load_high_score() -> void:

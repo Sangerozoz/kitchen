@@ -22,6 +22,8 @@ var _minimap_img: Image
 var _minimap_tex: ImageTexture
 var _dirty_tex: bool = false
 var _dirty_minimap: bool = false
+var _tex_upload_accum: float = 0.0
+var _minimap_upload_accum: float = 0.0
 
 var _lawn_rect: TextureRect
 var _shader_mat: ShaderMaterial
@@ -193,13 +195,19 @@ func count_unmowed_special_cells() -> int:
 			c += 1
 	return c
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
 	if _dirty_tex:
-		_state_tex.update(_state_img)
-		_dirty_tex = false
+		_tex_upload_accum += delta
+		if _tex_upload_accum >= 0.033:
+			_state_tex.update(_state_img)
+			_dirty_tex = false
+			_tex_upload_accum = 0.0
 	if _dirty_minimap:
-		_minimap_tex.update(_minimap_img)
-		_dirty_minimap = false
+		_minimap_upload_accum += delta
+		if _minimap_upload_accum >= 0.10:
+			_minimap_tex.update(_minimap_img)
+			_dirty_minimap = false
+			_minimap_upload_accum = 0.0
 
 func _rebuild_all_images() -> void:
 	for cy in range(GRID_H):

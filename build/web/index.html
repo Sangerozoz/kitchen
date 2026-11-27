@@ -38,8 +38,8 @@
 		}
 		@media (max-aspect-ratio: 9/17) {
 			:root {
-				--safe-top: max(env(safe-area-inset-top, 0px), 48px);
-				--safe-bottom: max(env(safe-area-inset-bottom, 0px), 30px);
+				--safe-top: max(calc(env(safe-area-inset-top, 0px) + 44px), 88px);
+				--safe-bottom: max(env(safe-area-inset-bottom, 0px), 32px);
 			}
 		}
 		#safe-area-probe {
@@ -189,6 +189,18 @@
 
 	<script src="index.js"></script>
 	<script>
+	// Cap WebGL DPR to 1.5x on high-DPI mobile phones (3x DPR = 4x more GPU fragments on Android!)
+	(function () {
+		try {
+			var realDpr = window.devicePixelRatio || 1;
+			if (realDpr > 1.5) {
+				Object.defineProperty(window, 'devicePixelRatio', {
+					get: function () { return 1.5; },
+					configurable: true
+				});
+			}
+		} catch (_e) {}
+	}());
 	window.__getSafeAreaInsets = function () {
 		var el = document.getElementById('safe-area-probe');
 		var top = 0, bottom = 0, left = 0, right = 0;
@@ -202,8 +214,164 @@
 		var isTouch = (navigator.maxTouchPoints > 0) || ('ontouchstart' in window);
 		return [top, bottom, left, right, window.innerWidth || 0, window.innerHeight || 0, isTouch ? 1 : 0].join(',');
 	};
+
+	// TapTap H5 Rewarded Video Ad Bridge (H5 supports Rewarded Video only via tap.createRewardedVideoAd)
+	window.__TAP_AD_CONFIG = window.__TAP_AD_CONFIG || {
+		// TapTap 竖屏小游戏广告位 ID (portrait_space_id，已通过 TapTap 小游戏 MCP check_ads_status 自动获取)
+		rewardedAdUnitId: '1054324'
+	};
 	(function () {
-		const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":4492216,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
+		var adInstance = null;
+		var activeUnitId = '';
+		var busy = false;
+		var pendingPlacement = '';
+		var safetyTimer = null;
+		var resultQueue = [];
+
+		function resolveUnitId(overrideId) {
+			var raw = overrideId || (window.__TAP_AD_CONFIG && window.__TAP_AD_CONFIG.rewardedAdUnitId) || '';
+			var id = String(raw).trim();
+			if (!id || id.indexOf('REPLACE_') === 0 || id === 'your-ad-unit-id') return '';
+			return id;
+		}
+
+		function hasTapRewardedApi() {
+			return typeof window.tap !== 'undefined' && window.tap && typeof window.tap.createRewardedVideoAd === 'function';
+		}
+
+		function pushResult(placement, status, rewarded, message) {
+			busy = false;
+			pendingPlacement = '';
+			if (safetyTimer) {
+				clearTimeout(safetyTimer);
+				safetyTimer = null;
+			}
+			resultQueue.push({
+				placement: placement || '',
+				status: status || 'error',
+				rewarded: !!rewarded,
+				message: message || ''
+			});
+		}
+
+		function ensureAd(unitId) {
+			if (!hasTapRewardedApi() || !unitId) return null;
+			if (adInstance && activeUnitId === unitId) return adInstance;
+			try {
+				activeUnitId = unitId;
+				adInstance = window.tap.createRewardedVideoAd({ adUnitId: unitId });
+				if (typeof adInstance.onLoad === 'function') {
+					adInstance.onLoad(function () {
+						console.log('[TapAdBridge] Rewarded video loaded');
+					});
+				}
+				if (typeof adInstance.onError === 'function') {
+					adInstance.onError(function (err) {
+						console.warn('[TapAdBridge] Rewarded video error:', err);
+						if (busy) {
+							var msg = (err && (err.errMsg || err.message)) ? String(err.errMsg || err.message) : 'ad_error';
+							pushResult(pendingPlacement, 'error', false, msg);
+						}
+					});
+				}
+				if (typeof adInstance.onClose === 'function') {
+					adInstance.onClose(function (res) {
+						// Strict TapTap rule: ONLY grant reward when res && res.isEnded === true
+						var ended = !!(res && res.isEnded === true);
+						console.log('[TapAdBridge] Rewarded video closed, isEnded =', ended);
+						if (busy) {
+							pushResult(pendingPlacement, ended ? 'rewarded' : 'cancelled', ended, ended ? '' : 'not_ended');
+						}
+					});
+				}
+				return adInstance;
+			} catch (e) {
+				console.warn('[TapAdBridge] createRewardedVideoAd failed:', e);
+				adInstance = null;
+				return null;
+			}
+		}
+
+		window.__TapAdBridge = {
+			init: function (unitId) {
+				var id = resolveUnitId(unitId);
+				if (!hasTapRewardedApi()) return 'no_tap_env';
+				if (!id) return 'missing_unit_id';
+				ensureAd(id);
+				return 'ready';
+			},
+			getEnvStatus: function (unitId) {
+				var id = resolveUnitId(unitId);
+				if (!hasTapRewardedApi()) return 'no_tap_env';
+				if (!id) return 'missing_unit_id';
+				return 'ready';
+			},
+			showRewarded: function (placement, unitId) {
+				if (busy) return 'busy';
+				if (!hasTapRewardedApi()) {
+					pushResult(placement, 'unsupported', false, 'no_tap_env');
+					return 'unsupported';
+				}
+				var id = resolveUnitId(unitId);
+				if (!id) {
+					pushResult(placement, 'missing_unit_id', false, 'missing_unit_id');
+					return 'missing_unit_id';
+				}
+				var ad = ensureAd(id);
+				if (!ad) {
+					pushResult(placement, 'error', false, 'init_failed');
+					return 'error';
+				}
+				busy = true;
+				pendingPlacement = placement || '';
+				// Safety guard so a stalled ad SDK call can never freeze the game
+				safetyTimer = setTimeout(function () {
+					if (busy) {
+						pushResult(pendingPlacement, 'error', false, 'load_timeout');
+					}
+				}, 15000);
+
+				var openAd = function () {
+					return ad.show().then(function () {
+						if (safetyTimer) clearTimeout(safetyTimer);
+						safetyTimer = setTimeout(function () {
+							if (busy) {
+								pushResult(pendingPlacement, 'error', false, 'watch_timeout');
+							}
+						}, 120000);
+					});
+				};
+
+				try {
+					openAd().catch(function () {
+						return ad.load().then(function () {
+							return openAd();
+						});
+					}).catch(function (err) {
+						console.warn('[TapAdBridge] Rewarded show/load failed:', err);
+						if (busy) {
+							var msg = (err && (err.errMsg || err.message)) ? String(err.errMsg || err.message) : 'show_failed';
+							pushResult(pendingPlacement, 'error', false, msg);
+						}
+					});
+				} catch (e) {
+					pushResult(placement, 'error', false, String(e));
+					return 'error';
+				}
+				return 'started';
+			},
+			pollResult: function () {
+				if (resultQueue.length === 0) return '';
+				try {
+					return JSON.stringify(resultQueue.shift());
+				} catch (_e) {
+					return '';
+				}
+			}
+		};
+	}());
+	(function () {
+		const GODOT_CONFIG = {"args":[],"canvasResizePolicy":2,"emscriptenPoolSize":8,"ensureCrossOriginIsolationHeaders":false,"executable":"index","experimentalVK":false,"fileSizes":{"index.pck":4538828,"index.wasm":39514754},"focusCanvas":true,"gdextensionLibs":[],"godotPoolSize":4};
 		const GODOT_THREADS_ENABLED = false;
 		const statusOverlay = document.getElementById('status');
 		const barFill = document.getElementById('bar-fill');
@@ -211,6 +379,7 @@
 		const statusNotice = document.getElementById('status-notice');
 
 		function showError(msg) {
+			if (!statusOverlay || !statusOverlay.isConnected) return;
 			statusNotice.style.display = 'block';
 			statusNotice.textContent = String(msg);
 			statusText.textContent = '!';

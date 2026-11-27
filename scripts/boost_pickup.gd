@@ -21,6 +21,7 @@ var lifetime_paused: bool = false
 
 var _phase: float = 0.0
 var _pop_scale: float = 0.0
+var _redraw_accum: float = 0.0
 
 func setup(pos: Vector2, dur: float = 18.0) -> void:
 	position = pos
@@ -40,7 +41,10 @@ func _process(delta: float) -> void:
 			expired.emit(self)
 			queue_free()
 			return
-	queue_redraw()
+	_redraw_accum += delta
+	if _redraw_accum >= 0.05:
+		_redraw_accum = 0.0
+		queue_redraw()
 
 func try_collect(mower_pos: Vector2, mower_radius: float) -> bool:
 	if is_collected:
@@ -72,7 +76,7 @@ func _draw() -> void:
 	for i in range(RAINBOW_COLS.size()):
 		var a0 := t * 2.2 + float(i) * seg_arc
 		var a1 := a0 + seg_arc * 0.85
-		draw_arc(Vector2.ZERO, halo_r, a0, a1, 8, Color(RAINBOW_COLS[i].r, RAINBOW_COLS[i].g, RAINBOW_COLS[i].b, 0.88), 3.4, true)
+		draw_arc(Vector2.ZERO, halo_r, a0, a1, 6, Color(RAINBOW_COLS[i].r, RAINBOW_COLS[i].g, RAINBOW_COLS[i].b, 0.88), 3.4, false)
 
 	# Remaining lifetime ring
 	draw_arc(
@@ -80,10 +84,10 @@ func _draw() -> void:
 		22.0 * pop,
 		-PI * 0.5,
 		-PI * 0.5 + TAU * remain,
-		28,
+		20,
 		Color(1.0, 0.98, 0.86, 0.92),
 		2.6,
-		true
+		false
 	)
 
 	# Glossy cartoon candy orb with thick warm chocolate outline (matches Start Screen!)

@@ -47,12 +47,16 @@ func _process(delta: float) -> void:
 	if kind == Kind.TREE and _canopy_node != null:
 		var target_alpha := 1.0
 		if is_instance_valid(_mower_ref):
-			var dist := global_position.distance_to(_mower_ref.global_position)
-			if dist < canopy_radius + 26.0:
+			var dist_sq := global_position.distance_squared_to(_mower_ref.global_position)
+			var check_r := canopy_radius + 26.0
+			if dist_sq < check_r * check_r:
 				target_alpha = 0.42
-		_canopy_alpha = lerpf(_canopy_alpha, target_alpha, delta * 8.0)
-		_canopy_node.modulate.a = _canopy_alpha
-		_canopy_node.queue_redraw()
+		if absf(_canopy_alpha - target_alpha) > 0.005:
+			_canopy_alpha = lerpf(_canopy_alpha, target_alpha, minf(delta * 8.0, 1.0))
+			_canopy_node.modulate.a = _canopy_alpha
+		# Gentle GPU-free node transform sway instead of rebuilding 13 draw_circles 60x/sec!
+		var t := Time.get_ticks_msec() * 0.001 + _seed_val
+		_canopy_node.position = Vector2(sin(t * 1.5) * 3.0, cos(t * 1.2) * 1.8)
 
 func _generate_rock_shape() -> void:
 	var count := 9
@@ -119,9 +123,7 @@ class TreeCanopyDrawer extends Node2D:
 	var seed_val: float = 0.0
 
 	func _draw() -> void:
-		var t := Time.get_ticks_msec() * 0.001 + seed_val
-		var sway := Vector2(sin(t * 1.5) * 3.0, cos(t * 1.2) * 1.8)
-		var base := Vector2(0.0, -8.0) + sway
+		var base := Vector2(0.0, -8.0)
 
 		# Outer dark foliage clusters
 		var lobes := 6

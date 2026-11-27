@@ -1,7 +1,7 @@
 extends Node
 class_name SfxManager
 
-const SAMPLE_RATE := 11025
+const SAMPLE_RATE := 22050
 const BGM_PATH := "res://assets/audio/bgm_meadow.wav"
 const BGM_PLAY_DB := -11.5
 const BGM_IDLE_DB := -16.5
@@ -13,6 +13,8 @@ var _sfx_players: Array[AudioStreamPlayer] = []
 var _sfx_cursor := 0
 var _streams: Dictionary = {}
 var _muted := false
+var _ad_paused := false
+var _bgm_was_playing_before_ad := false
 var _initialized := false
 var _last_cut_time := 0.0
 
@@ -49,7 +51,7 @@ func _ensure_initialized() -> void:
 
 func start_bgm(is_playing_round: bool = true) -> void:
 	_bgm_target_db = BGM_PLAY_DB if is_playing_round else BGM_IDLE_DB
-	if _muted:
+	if _muted or _ad_paused:
 		return
 	_ensure_initialized()
 	if _bgm_player != null and _bgm_player.stream != null and not _bgm_player.playing:
@@ -58,6 +60,27 @@ func start_bgm(is_playing_round: bool = true) -> void:
 
 func set_bgm_ducked(ducked: bool) -> void:
 	_bgm_target_db = BGM_IDLE_DB if ducked else BGM_PLAY_DB
+
+func set_ad_paused(paused: bool) -> void:
+	if _ad_paused == paused:
+		return
+	_ad_paused = paused
+	if _ad_paused:
+		_bgm_was_playing_before_ad = _bgm_player != null and _bgm_player.playing
+		if _bgm_player != null and _bgm_player.playing:
+			_bgm_player.stop()
+		if _engine_player != null and _engine_player.playing:
+			_engine_player.stop()
+		for p in _sfx_players:
+			if p != null and p.playing:
+				p.stop()
+	else:
+		if not _muted and _bgm_was_playing_before_ad:
+			_ensure_initialized()
+			if _bgm_player != null and _bgm_player.stream != null and not _bgm_player.playing:
+				_bgm_player.volume_db = _bgm_target_db
+				_bgm_player.play()
+		_bgm_was_playing_before_ad = false
 
 func is_muted() -> bool:
 	return _muted
@@ -69,7 +92,7 @@ func toggle_mute() -> bool:
 			_bgm_player.stop()
 		if _engine_player != null and _engine_player.playing:
 			_engine_player.stop()
-	else:
+	elif not _ad_paused:
 		_ensure_initialized()
 		if _bgm_player != null and _bgm_player.stream != null and not _bgm_player.playing:
 			_bgm_player.volume_db = _bgm_target_db
@@ -77,7 +100,7 @@ func toggle_mute() -> bool:
 	return _muted
 
 func start_engine() -> void:
-	if _muted:
+	if _muted or _ad_paused:
 		return
 	_ensure_initialized()
 	if not _engine_player.playing:
@@ -88,30 +111,40 @@ func stop_engine() -> void:
 		_engine_player.stop()
 
 func update_engine(speed_ratio: float, boosting: bool, active: bool) -> void:
-	if _muted or not active:
+	if _muted or _ad_paused or not active:
 		if _engine_player != null and _engine_player.playing:
 			_engine_player.stop()
 		return
 	_ensure_initialized()
+	var spd := clampf(speed_ratio, 0.0, 1.4)
+	# Fade engine quietly to silence when parked so BGM stays clean & pleasant
+	if spd < 0.06 and not boosting:
+		if _engine_player.playing:
+			_engine_player.volume_db = lerpf(_engine_player.volume_db, -48.0, 0.18)
+			if _engine_player.volume_db <= -44.0:
+				_engine_player.stop()
+		return
 	if not _engine_player.playing:
+		_engine_player.volume_db = -42.0
 		_engine_player.play()
-	var target_pitch := 0.78 + clampf(speed_ratio, 0.0, 1.4) * 0.48 + (0.22 if boosting else 0.0)
-	_engine_player.pitch_scale = lerpf(_engine_player.pitch_scale, target_pitch, 0.15)
-	var target_vol := -25.0 + clampf(speed_ratio, 0.0, 1.0) * 6.5 + (2.5 if boosting else 0.0)
-	_engine_player.volume_db = lerpf(_engine_player.volume_db, target_vol, 0.15)
+	var target_pitch := 0.88 + spd * 0.28 + (0.14 if boosting else 0.0)
+	_engine_player.pitch_scale = lerpf(_engine_player.pitch_scale, target_pitch, 0.12)
+	# Soft, unobtrusive airy whir that blends warmly underneath the meadow BGM
+	var target_vol := -32.0 + clampf(spd, 0.0, 1.0) * 8.5 + (2.0 if boosting else 0.0)
+	_engine_player.volume_db = lerpf(_engine_player.volume_db, target_vol, 0.12)
 
 func play_cut(is_special: bool) -> void:
-	if _muted:
+	if _muted or _ad_paused:
 		return
 	var now := Time.get_ticks_msec() * 0.001
-	var min_interval := 0.045 if is_special else 0.065
+	var min_interval := 0.055 if is_special else 0.085
 	if now - _last_cut_time < min_interval:
 		return
 	_last_cut_time = now
 	if is_special:
-		_play("special_cut", randf_range(0.95, 1.18), -8.0)
+		_play("special_cut", randf_range(0.96, 1.16), -9.0)
 	else:
-		_play("cut", randf_range(0.88, 1.16), -14.0)
+		_play("cut", randf_range(0.92, 1.14), -12.5)
 
 func play_flower() -> void:
 	_play("flower", randf_range(0.98, 1.06), -6.0)
@@ -142,7 +175,7 @@ func play_star(star_idx: int) -> void:
 	_play("star_ding", pitch, -5.5)
 
 func _play(key: String, pitch: float = 1.0, vol_db: float = -8.0) -> void:
-	if _muted:
+	if _muted or _ad_paused:
 		return
 	_ensure_initialized()
 	if not _streams.has(key):
@@ -188,29 +221,64 @@ func _make_wav(samples: PackedFloat32Array, loop: bool = false) -> AudioStreamWA
 	return wav
 
 func _gen_engine_loop() -> AudioStreamWAV:
-	# Seamless 0.25s low mower purr
-	var n := int(SAMPLE_RATE * 0.25)
+	# Silky, gentle airy blade-breeze whir (zero harsh buzz/hum!) with seamless 0.5s crossfade
+	var n := int(SAMPLE_RATE * 0.50)
+	var raw := PackedFloat32Array()
+	raw.resize(n + 2048)
+	var lp1 := 0.0
+	var lp2 := 0.0
+	var hp := 0.0
+	var prev_in := 0.0
+	for i in range(raw.size()):
+		var t := float(i) / float(SAMPLE_RATE)
+		# Soft warm band-passed breeze airflow (no harsh static)
+		var wn := randf_range(-1.0, 1.0)
+		lp1 += (wn - lp1) * 0.095
+		lp2 += (lp1 - lp2) * 0.14
+		hp = 0.96 * (hp + lp2 - prev_in)
+		prev_in = lp2
+		# Ultra-subtle warm low purr (pure rounded sine at 74Hz, integer cycles per 0.5s)
+		var purr := sin(TAU * 74.0 * t) * 0.16 + sin(TAU * 148.0 * t) * 0.04
+		var breeze := hp * 0.72
+		raw[i] = (breeze + purr) * 0.42
+	# Seamless circular crossfade over last 1024 samples so loop click is impossible
+	var fade := 1024
 	var buf := PackedFloat32Array()
 	buf.resize(n)
 	for i in range(n):
-		var t := float(i) / float(SAMPLE_RATE)
-		# Frequencies multiples of 4 Hz for seamless 0.25s loop
-		var s := sin(TAU * 52.0 * t) * 0.45 + sin(TAU * 104.0 * t) * 0.28 + sin(TAU * 156.0 * t) * 0.14
-		var flutter := 0.85 + 0.15 * sin(TAU * 16.0 * t)
-		buf[i] = s * flutter * 0.42
+		if i < fade:
+			var w := float(i) / float(fade)
+			buf[i] = raw[i + fade] * w + raw[n + i] * (1.0 - w)
+		else:
+			buf[i] = raw[i + fade]
 	return _make_wav(buf, true)
 
 func _gen_noise_snip(dur: float, amp: float) -> AudioStreamWAV:
-	var n := int(SAMPLE_RATE * dur)
+	# Therapeutic ASMR crisp leafy "shhk-pop" instead of gritty raw white noise!
+	var n := int(SAMPLE_RATE * maxf(dur, 0.075))
 	var buf := PackedFloat32Array()
 	buf.resize(n)
+	var lp := 0.0
+	var lp2 := 0.0
 	var prev := 0.0
+	var phase := 0.0
 	for i in range(n):
-		var env := sin(PI * float(i) / float(n))
-		var white := randf_range(-1.0, 1.0)
-		var high := white - prev * 0.65
-		prev = white
-		buf[i] = high * env * amp
+		var u := float(i) / float(n)
+		var t := float(i) / float(SAMPLE_RATE)
+		# Silky bell envelope with gentle attack & natural leafy tail
+		var env := sin(PI * pow(u, 0.75))
+		var wn := randf_range(-1.0, 1.0)
+		# Warm mid-high band-pass leafy rustle (removes harsh ear-piercing fizz)
+		lp += (wn - lp) * 0.36
+		var bp := lp - prev * 0.78
+		prev = lp
+		lp2 += (bp - lp2) * 0.52
+		# Tiny soft woody/leafy pop (adds pleasant tactile feedback)
+		var pop_env := exp(-t * 48.0) * minf(t * 260.0, 1.0)
+		var f := lerpf(360.0, 560.0, minf(t * 22.0, 1.0))
+		phase += TAU * f / float(SAMPLE_RATE)
+		var pop := sin(phase) * pop_env * 0.24
+		buf[i] = (lp2 * 0.72 * env + pop) * amp
 	return _make_wav(buf)
 
 func _gen_chime(notes: Array, dur: float) -> AudioStreamWAV:

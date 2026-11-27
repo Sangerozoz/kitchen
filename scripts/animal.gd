@@ -20,6 +20,7 @@ var _hit_cooldown: float = 0.0
 var _mud_timer: float = 2.4
 var _alert_timer: float = 0.0
 var _body_radius: float = 19.0
+var _redraw_accum: float = 0.0
 
 func setup(a_type: AnimalType, pos: Vector2, play_bounds: Rect2, mower: Node2D) -> void:
 	animal_type = a_type
@@ -108,7 +109,10 @@ func _physics_process(delta: float) -> void:
 			_state_timer = 1.6
 			_move_dir = (-push_dir).rotated(randf_range(-0.5, 0.5)).normalized()
 
-	queue_redraw()
+	_redraw_accum += delta
+	if _redraw_accum >= 0.033:
+		_redraw_accum = 0.0
+		queue_redraw()
 
 func _update_peaceful_wander(dist: float, to_mower: Vector2) -> float:
 	_alert_timer = 0.0

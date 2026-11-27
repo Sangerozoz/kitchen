@@ -118,7 +118,9 @@ func apply_mud_slip() -> bool:
 	return true
 
 func spawn_cut_particles(is_special: bool, count: int) -> void:
-	var n := mini(count, 7)
+	if _particles.size() >= 40:
+		return
+	var n := mini(count, mini(5, 40 - _particles.size()))
 	var chute_dir := Vector2.from_angle(facing_angle + PI * 0.58)
 	var origin := global_position + chute_dir * 16.0
 	for _i in range(n):
@@ -251,17 +253,17 @@ func _physics_process(delta: float) -> void:
 		var back_dir := -Vector2.from_angle(facing_angle)
 		var side_dir := Vector2(-back_dir.y, back_dir.x)
 		var tail_pos := global_position + back_dir * 20.0
-		if _rainbow_trail.is_empty() or tail_pos.distance_to(_last_trail_pos) >= 6.5:
+		if _rainbow_trail.is_empty() or tail_pos.distance_to(_last_trail_pos) >= 12.0:
 			_rainbow_trail.append({
 				"pos": tail_pos,
 				"side": side_dir,
 				"age": 0.0,
-				"max_age": 0.62,
+				"max_age": 0.58,
 			})
 			_last_trail_pos = tail_pos
-			if _rainbow_trail.size() > 64:
+			if _rainbow_trail.size() > 28:
 				_rainbow_trail.pop_front()
-		if velocity.length() > 30.0 and randf() < 0.78:
+		if velocity.length() > 30.0 and _particles.size() < 40 and randf() < 0.55:
 			var band_col: Color = RAINBOW_BANDS[randi() % RAINBOW_BANDS.size()]
 			var lateral := randf_range(-26.0, 26.0)
 			_particles.append({
@@ -338,7 +340,7 @@ func _draw_rainbow_trail() -> void:
 			var q1 := p1 + s1 * (center_off * taper1)
 			var c: Color = RAINBOW_BANDS[k]
 			c.a = alpha
-			draw_line(q0, q1, c, draw_w, true)
+			draw_line(q0, q1, c, draw_w, false)
 
 func _draw() -> void:
 	# Rainbow ribbon trail behind mower (drawn beneath mower & particles)
@@ -357,7 +359,7 @@ func _draw() -> void:
 		var pulse := 1.0 + 0.08 * sin(Time.get_ticks_msec() * 0.012)
 		var r := get_active_cut_radius() * pulse
 		draw_circle(Vector2.ZERO, r, Color(1.0, 0.85, 0.16, 0.16))
-		draw_arc(Vector2.ZERO, r, 0.0, TAU, 32, Color(1.0, 0.90, 0.24, 0.78), 2.8, true)
+		draw_arc(Vector2.ZERO, r, 0.0, TAU, 24, Color(1.0, 0.90, 0.24, 0.78), 2.8, false)
 
 	# Subtle mower blade cutting sweep circle under mower (glows rainbow-gold when widened by Turbo Pickup!)
 	var cut_r := get_active_cut_radius()
@@ -368,9 +370,9 @@ func _draw() -> void:
 		var seg := TAU / float(RAINBOW_BANDS.size())
 		for bi in range(RAINBOW_BANDS.size()):
 			var a0 := t_ms + float(bi) * seg
-			draw_arc(Vector2.ZERO, cut_r * bp, a0, a0 + seg * 0.92, 8, Color(RAINBOW_BANDS[bi].r, RAINBOW_BANDS[bi].g, RAINBOW_BANDS[bi].b, 0.88), 3.4, true)
+			draw_arc(Vector2.ZERO, cut_r * bp, a0, a0 + seg * 0.92, 6, Color(RAINBOW_BANDS[bi].r, RAINBOW_BANDS[bi].g, RAINBOW_BANDS[bi].b, 0.88), 3.4, false)
 	else:
-		draw_arc(Vector2.ZERO, cut_r, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.22), 1.8, true)
+		draw_arc(Vector2.ZERO, cut_r, 0.0, TAU, 22, Color(1.0, 1.0, 1.0, 0.22), 1.8, false)
 
 	# Ground shadow
 	draw_circle(Vector2(3.0, 6.0), 22.0, Color(0.04, 0.10, 0.04, 0.34))

@@ -15,6 +15,7 @@ var lifetime_paused: bool = false
 
 var _phase: float = 0.0
 var _bloom_scale: float = 0.0
+var _redraw_accum: float = 0.0
 
 func setup(pos: Vector2, flower_kind: FlowerKind = FlowerKind.SUNFLOWER, dur: float = 18.0) -> void:
 	position = pos
@@ -35,7 +36,10 @@ func _process(delta: float) -> void:
 			expired.emit(self)
 			queue_free()
 			return
-	queue_redraw()
+	_redraw_accum += delta
+	if _redraw_accum >= 0.05:
+		_redraw_accum = 0.0
+		queue_redraw()
 
 func try_collect(mower_pos: Vector2, mower_radius: float) -> bool:
 	if is_collected:
@@ -72,7 +76,7 @@ func _draw() -> void:
 	# Pulsing glowing ground halo
 	var halo_r := (26.0 + 5.0 * sin(t * 4.0)) * pop
 	draw_circle(Vector2.ZERO, halo_r, Color(primary.r, primary.g, primary.b, 0.20))
-	draw_arc(Vector2.ZERO, halo_r, 0.0, TAU, 32, Color(primary.r, primary.g, primary.b, 0.55), 2.5, true)
+	draw_arc(Vector2.ZERO, halo_r, 0.0, TAU, 24, Color(primary.r, primary.g, primary.b, 0.55), 2.5, false)
 
 	# Remaining lifetime ring
 	draw_arc(
@@ -80,10 +84,10 @@ func _draw() -> void:
 		22.0 * pop,
 		-PI * 0.5,
 		-PI * 0.5 + TAU * remain,
-		28,
+		20,
 		Color(1.0, 0.98, 0.82, 0.85),
 		2.8,
-		true
+		false
 	)
 
 	# Soft leaf cluster under flower
